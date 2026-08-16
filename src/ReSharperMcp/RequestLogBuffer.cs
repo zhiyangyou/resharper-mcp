@@ -74,6 +74,20 @@ namespace ReSharperMcp
     }
 
     /// <summary>
+    /// Per-tool aggregate statistics. Counters are cumulative from process start and never
+    /// evicted with the ring buffer, so totals reflect the full process lifetime.
+    /// Only <see cref="RequestKind.Local"/> tool executions are counted (executed in this process,
+    /// including calls proxied in by the primary) — forwarded proxy hops are not double-counted.
+    /// </summary>
+    public sealed class ToolStat
+    {
+        public string Name;
+        public long CallCount;
+        public long TotalDurationMs;
+        public long ErrorCount;
+    }
+
+    /// <summary>
     /// Thread-safe ring buffer of recent <see cref="RequestLogEntry"/> values plus a lightweight
     /// pub/sub for SSE push. Owned at the shell-component level so log history survives promotion
     /// (a peer that becomes primary gets a fresh <see cref="McpHttpServer"/> but keeps this buffer).
@@ -87,6 +101,7 @@ namespace ReSharperMcp
         private readonly object _lock = new object();
         private readonly RequestLogEntry[] _ring = new RequestLogEntry[Capacity];
         private readonly long[] _counts = new long[3];
+        private readonly Dictionary<string, ToolStat> _toolStats = new Dictionary<string, ToolStat>();
         private long _errors;
         private int _head;
         private int _count;
@@ -121,6 +136,7 @@ namespace ReSharperMcp
                 if (_count < Capacity) _count++;
                 _counts[(int)entry.Kind]++;
                 if (entry.IsError) _errors++;
+                BumpToolStat(entry);
 
                 if (_subscribers.Count > 0)
                 {
@@ -168,6 +184,50 @@ namespace ReSharperMcp
                 counts = (long[])_counts.Clone();
                 errors = _errors;
                 nextIndex = _nextIndex;
+            }
+        }
+
+        /// <summary>
+        /// Updates the cumulative per-tool aggregates for a committed entry.
+        /// Called while holding <c>_lock</c> (from <see cref="Commit"/>), so it is not re-entrant-safe
+        /// on its own — see <see cref="GetToolStats"/> for the locked public entry point.
+        /// </summary>
+        private void BumpToolStat(RequestLogEntry entry)
+        {
+            if (entry.Kind != RequestKind.Local) return;
+            if (string.IsNullOrEmpty(entry.Tool)) return;
+
+            if (!_toolStats.TryGetValue(entry.Tool, out var stat))
+            {
+                stat = new ToolStat { Name = entry.Tool };
+                _toolStats[entry.Tool] = stat;
+            }
+            stat.CallCount++;
+            stat.TotalDurationMs += entry.DurationMs;
+            if (entry.IsError) stat.ErrorCount++;
+        }
+
+        /// <summary>
+        /// Returns a snapshot of cumulative per-tool aggregates, sorted by total duration descending.
+        /// Values are copied so callers can read them safely without racing concurrent Commits.
+        /// </summary>
+        public List<ToolStat> GetToolStats()
+        {
+            lock (_lock)
+            {
+                var result = new List<ToolStat>(_toolStats.Values.Count);
+                foreach (var stat in _toolStats.Values)
+                {
+                    result.Add(new ToolStat
+                    {
+                        Name = stat.Name,
+                        CallCount = stat.CallCount,
+                        TotalDurationMs = stat.TotalDurationMs,
+                        ErrorCount = stat.ErrorCount
+                    });
+                }
+                result.Sort((a, b) => b.TotalDurationMs.CompareTo(a.TotalDurationMs));
+                return result;
             }
         }
 

@@ -959,6 +959,7 @@ namespace ReSharperMcp
                         ["other"] = counts[(int)RequestKind.Other],
                         ["errors"] = errors
                     },
+                    ["toolStats"] = BuildToolStatsArray(),
                     ["localSolutions"] = BuildSolutionsArray(includePeers: false),
                     ["solutions"] = BuildSolutionsArray(includePeers: true),
                     ["logs"] = logs
@@ -993,6 +994,27 @@ namespace ReSharperMcp
                 }
             }
             return solutions;
+        }
+
+        /// <summary>
+        /// Serializes cumulative per-tool aggregates (name / call count / total duration / error count)
+        /// into a JSON array for the internal/monitor response. Delegates to the buffer, which owns
+        /// the lock and returns a sorted snapshot.
+        /// </summary>
+        private JArray BuildToolStatsArray()
+        {
+            var array = new JArray();
+            foreach (var stat in _requestLogs.GetToolStats())
+            {
+                array.Add(new JObject
+                {
+                    ["name"] = stat.Name,
+                    ["callCount"] = stat.CallCount,
+                    ["totalDurationMs"] = stat.TotalDurationMs,
+                    ["errorCount"] = stat.ErrorCount
+                });
+            }
+            return array;
         }
 
         private JsonRpcResponse HandleInternalRestart(JsonRpcRequest request)

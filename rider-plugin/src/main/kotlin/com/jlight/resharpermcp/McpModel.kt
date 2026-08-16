@@ -19,6 +19,14 @@ data class ClientSession(
     val offlineSince: Long
 )
 
+/** Per-tool aggregate: cumulative call count, total duration, and error count. */
+data class ToolStat(
+    val name: String,
+    val callCount: Long,
+    val totalDurationMs: Long,
+    val errorCount: Long
+)
+
 data class MonitorState(
     val online: Boolean,
     val role: Role,
@@ -29,10 +37,11 @@ data class MonitorState(
     val clientCount: Int,
     val clients: List<ClientSession>,
     val nextIndex: Long,
-    val counts: Map<String, Long>
+    val counts: Map<String, Long>,
+    val toolStats: List<ToolStat>
 ) {
     companion object {
-        val offline = MonitorState(false, Role.UNKNOWN, 0, emptyList(), emptyList(), emptyList(), 0, emptyList(), 0, emptyMap())
+        val offline = MonitorState(false, Role.UNKNOWN, 0, emptyList(), emptyList(), emptyList(), 0, emptyList(), 0, emptyMap(), emptyList())
     }
 }
 

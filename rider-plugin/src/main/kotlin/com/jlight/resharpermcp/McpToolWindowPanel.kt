@@ -35,10 +35,12 @@ class McpToolWindowPanel(project: Project, toolWindow: ToolWindow) : JPanel(Bord
     private val localModel = McpLogsTableModel { it.kind == LogKind.LOCAL }
     private val routedModel = McpLogsTableModel { it.kind == LogKind.FORWARDED }
     private val clientsModel = McpClientsTableModel()
+    private val statsModel = McpStatsTableModel()
 
     private val localTable = JBTable(localModel)
     private val routedTable = JBTable(routedModel)
     private val clientsTable = JBTable(clientsModel)
+    private val statsTable = JBTable(statsModel)
 
     private val tabs = JBTabbedPane()
     private var subscription: AutoCloseable? = null
@@ -72,6 +74,7 @@ class McpToolWindowPanel(project: Project, toolWindow: ToolWindow) : JPanel(Bord
         tabs.addTab("本地请求", JScrollPane(localTable))
         tabs.addTab("路由请求", JScrollPane(routedTable))
         tabs.addTab("MCP 客户端", JScrollPane(clientsTable))
+        tabs.addTab("工具统计", JScrollPane(statsTable))
         updateTabAvailability()
 
         add(strip, BorderLayout.NORTH)
@@ -103,6 +106,7 @@ class McpToolWindowPanel(project: Project, toolWindow: ToolWindow) : JPanel(Bord
                 localModel.setEntries(entries)
                 routedModel.setEntries(entries)
                 clientsModel.setClients(state.clients)
+                statsModel.setStats(state.toolStats)
             }
         }
         service.refresh()

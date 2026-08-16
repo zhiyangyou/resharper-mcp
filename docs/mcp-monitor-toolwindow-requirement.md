@@ -323,6 +323,20 @@ McpMonitorClient（传输层）──fetchMonitor──► McpMonitorService（�
 - 成败列：新列，成功绿色 ✓ / 失败红色 ✗。
 - 客户端识别：按 `clientInfo`（name+version）+ 远程 IP；生命周期：活动心跳 + 30s 超时标记离线。
 
+### 迭代 2（2026-08-16）——工具统计 Tab
+
+**需求**：
+- 新增「工具统计」Tab：显示当前所有工具的统计、调用次数和总耗时。
+
+**实现**：
+- 后端 `RequestLogBuffer` 新增 `ToolStat` 聚合（名称/调用次数/总耗时/错误数），`Commit` 时更新，新增 `GetToolStats()` 锁内快照；`internal/monitor` 响应新增 `toolStats` 数组（按总耗时降序）。
+- 前端 `McpModel` 新增 `ToolStat` 数据类、`MonitorState` 加 `toolStats` 字段；`McpMonitorClient` 解析；新增 `McpStatsTableModel`（Tool/调用次数/总耗时/平均耗时/错误数）；`McpToolWindowPanel` 新增「工具统计」Tab 并订阅更新。
+
+**决策**：
+- 统计口径：本进程实际执行的 `tools/call`（`kind=Local`，含被 Primary 转发的调用），不含 Forwarded（代理转发 hop）——避免双重计数。
+- 统计是累计值，随进程生命周期，不随环形缓冲（512 条）淘汰。
+- 表格列：Tool / 调用次数 / 总耗时 / 平均耗时 / 错误数。
+
 ---
 
 ## 7. 未做的事（Non-goals / 待办）

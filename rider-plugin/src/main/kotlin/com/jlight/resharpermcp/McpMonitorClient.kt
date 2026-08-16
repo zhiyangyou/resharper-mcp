@@ -137,6 +137,7 @@ class McpMonitorClient {
             peerSolutions = peerSolutions,
             clientCount = result["clientCount"].asInt(0),
             clients = result["clients"].map { parseClient(it) },
+            toolStats = result["toolStats"].map { parseToolStat(it) },
             nextIndex = result["nextIndex"].asLong(),
             counts = result["counts"].fields().asSequence().associate { it.key to it.value.asLong() }
         )
@@ -156,6 +157,15 @@ class McpMonitorClient {
             requestCount = node["requestCount"].asLong(),
             online = node["online"].asBoolean(false),
             offlineSince = node["offlineSince"].asLong(0)
+        )
+    }
+
+    private fun parseToolStat(node: JsonNode): ToolStat {
+        return ToolStat(
+            name = node["name"].asText(),
+            callCount = node["callCount"].asLong(0),
+            totalDurationMs = node["totalDurationMs"].asLong(0),
+            errorCount = node["errorCount"].asLong(0)
         )
     }
 
