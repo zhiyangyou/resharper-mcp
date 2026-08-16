@@ -23,3 +23,4 @@ JetBrains.*.crt
 JetBrains.*.pem
 JetBrains.*.csexp
 JetBrains.*.consentOptions
+/.idea/
