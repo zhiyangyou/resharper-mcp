@@ -308,6 +308,12 @@ namespace ReSharperMcp
                     entry.ArgsPreviewTruncated = entry.Args.Length > RequestLogBuffer.PreviewLength;
                 }
             }
+            else
+            {
+                // Protocol-level requests (initialize, tools/list, internal/*, ...) are not
+                // tool invocations — mark them Other so the monitor filters them out by kind.
+                entry.Kind = RequestKind.Other;
+            }
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             // JSON-RPC notifications have no id — respond with 202 Accepted, no body

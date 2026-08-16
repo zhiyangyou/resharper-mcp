@@ -264,6 +264,18 @@ src/ReSharperMcp/
 
 Override port: `RESHARPER_MCP_PORT=9999`
 
+## Deploying
+
+When the user says "部署" (deploy), run:
+
+```bash
+./deploy-rider.sh               # stops all Rider processes, then builds & installs
+```
+
+`deploy-rider.sh` first kills all running Rider processes (so plugin files are not locked
+during the copy), then delegates to `install-rider.sh`. After it finishes, tell the user to
+restart Rider for the plugin to take effect.
+
 ## Publishing
 
 ```bash

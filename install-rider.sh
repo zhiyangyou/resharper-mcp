@@ -28,10 +28,20 @@ fi
 PLUGIN_DIR="$RIDER_DIR/plugins/$PLUGIN_NAME"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Ensure JAVA_HOME is set for Gradle. If not already set, try to find Rider's bundled JBR.
+# Ensure JAVA_HOME is set for Gradle. If not already set, try to find a JDK that Gradle
+# supports (Gradle 8.13 needs Java <= 24, so Rider's JBR 25 is NOT usable).
 if [ -z "${JAVA_HOME:-}" ]; then
-    # macOS: Rider.app bundles a JBR
-    if [ -d "/Applications/Rider.app/Contents/jbr/Contents/Home" ]; then
+    # macOS: Rider.app bundles a JBR — but it may be too new for Gradle, so prefer Homebrew JDK 21/17
+    if [ -d "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" ]; then
+        export JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+    elif [ -d "/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" ]; then
+        export JAVA_HOME="/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+    elif [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
+        export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+    # Fall back to Rider's bundled JBR (user location first, then /Applications)
+    elif [ -d "$HOME/Applications/Rider.app/Contents/jbr/Contents/Home" ]; then
+        export JAVA_HOME="$HOME/Applications/Rider.app/Contents/jbr/Contents/Home"
+    elif [ -d "/Applications/Rider.app/Contents/jbr/Contents/Home" ]; then
         export JAVA_HOME="/Applications/Rider.app/Contents/jbr/Contents/Home"
     fi
 fi

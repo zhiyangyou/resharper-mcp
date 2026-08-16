@@ -13,6 +13,10 @@ import java.util.concurrent.TimeUnit
  * Project-level single source of truth for MCP monitor state. Polls the backend every few
  * seconds for status + log deltas (the durable source), and consumes SSE pushes for live updates.
  * Both the status bar and the Tool Window subscribe here — no duplicated polling or connections.
+ *
+ * The service applies [logFilter] when ingesting entries, so the shared snapshot only ever holds
+ * tool calls — protocol-level requests (initialize, tools/list, internal/monitor, ...) never reach
+ * subscribers. This is the single filter point for the whole monitor UI.
  */
 @Service(Service.Level.PROJECT)
 class McpMonitorService(private val project: Project) : Disposable {
@@ -76,7 +80,7 @@ class McpMonitorService(private val project: Project) : Disposable {
         if (fresh.isNotEmpty()) {
             client.lastIndex = fresh.maxOf { it.index }
             synchronized(this) {
-                entries = (entries + fresh)
+                entries = (entries + fresh.filter(logFilter))
                     .sortedBy { it.index }
                     .takeLast(MAX_ENTRIES)
             }
@@ -87,6 +91,7 @@ class McpMonitorService(private val project: Project) : Disposable {
     private fun onSseLog(entry: RequestLogEntry) {
         if (entry.index <= client.lastIndex) return // duplicate / replay — drop
         client.lastIndex = entry.index
+        if (!logFilter(entry)) return // filtered out — advance lastIndex but don't store
         synchronized(this) {
             entries = (entries + entry).sortedBy { it.index }.takeLast(MAX_ENTRIES)
         }
@@ -104,5 +109,12 @@ class McpMonitorService(private val project: Project) : Disposable {
     private companion object {
         const val POLL_INTERVAL_SECONDS = 5L
         const val MAX_ENTRIES = 1000
+
+        /**
+         * Default log filter: only tool invocations (tools/call). Protocol-level requests
+         * (initialize, tools/list, internal/status, internal/monitor, ...) are recorded by the
+         * backend as kind=OTHER and dropped here, so the monitor only shows user-facing tool calls.
+         */
+        val logFilter: (RequestLogEntry) -> Boolean = { it.method == "tools/call" }
     }
 }
