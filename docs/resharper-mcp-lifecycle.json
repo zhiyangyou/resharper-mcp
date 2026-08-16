@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "主/从 MCP 服务器生命周期",
+    "subtitle": "端口绑定、运行角色与故障提升——McpShellComponent 的状态机",
+    "output": "resharper-mcp-lifecycle.html",
+    "quality_profile": "showcase",
+    "viewBox": [980, 660],
+    "views": [
+      { "id": "boot-rail", "label": "启动与角色分配", "focus": ["boot", "primary", "peer"], "note": "首个实例绑定基础端口成为 Primary，后续实例绑定下一端口成为 Peer。" },
+      { "id": "promotion", "label": "故障提升", "focus": ["peer", "primary", "shutdown"], "note": "Peer 看门狗探测主端口失效后尝试接管。" }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "运行角色" },
+    { "id": "terminal", "label": "终止" }
+  ],
+  "states": [
+    { "id": "boot", "type": "start", "label": "启动", "sublabel": "尝试绑定 23741..23750", "lane": "main", "col": 0, "step": "01", "tag": "绑定端口" },
+    { "id": "peer", "type": "active", "label": "Peer", "sublabel": "绑定 23742+", "lane": "main", "col": 1, "step": "02", "tag": "注册上报" },
+    { "id": "primary", "type": "active", "label": "Primary", "sublabel": "绑定 23741", "lane": "main", "col": 2, "step": "02", "tag": "单端点" },
+    { "id": "shutdown", "type": "success", "label": "停止", "sublabel": "注销 · 停监听", "lane": "terminal", "col": 1, "tag": "优雅退出" }
+  ],
+  "transitions": [
+    { "id": "boot-to-peer", "from": "boot", "to": "peer", "label": "绑定成功 ≠ 基础端口", "variant": "default", "fromSide": "bottom", "toSide": "bottom", "via": [[94, 210], [248, 210]] },
+    { "id": "boot-to-primary", "from": "boot", "to": "primary", "label": "绑定成功 = 基础端口", "variant": "emphasis", "fromSide": "top", "toSide": "top", "via": [[94, 70], [402, 70]] },
+    { "id": "peer-to-primary", "from": "peer", "to": "primary", "label": "看门狗探测主端口失效 · 接管", "variant": "emphasis", "fromSide": "right", "toSide": "left", "route": "straight", "labelDy": -28 },
+    { "id": "primary-to-shutdown", "from": "primary", "to": "shutdown", "label": "Rider 退出", "variant": "default", "fromSide": "right", "toSide": "top", "via": [[556, 157], [556, 440]] },
+    { "id": "peer-to-shutdown", "from": "peer", "to": "shutdown", "label": "Rider 退出", "variant": "default", "fromSide": "bottom", "toSide": "top", "via": [[248, 470], [556, 470]] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "启动绑定", "items": ["从基础端口 23741 起尝试绑定", "首个实例绑定成功成为 Primary", "后续实例绑定 23742+ 成为 Peer 并注册"] },
+    { "dot": "amber", "title": "故障恢复", "items": ["看门狗每 30s 探测一次", "Peer 探测到主端口失效即尝试接管", "接管需重新绑定基础端口并转移注册"] },
+    { "dot": "rose", "title": "终止", "items": ["Primary 健康检查失败触发 listener 重启", "10 个端口全被占用则绑定失败", "Rider 退出时注销解决方案并停止"] }
+  ]
+}

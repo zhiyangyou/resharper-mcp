@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ReSharper MCP 服务器架构",
+    "subtitle": "运行于 Rider 宿主进程内的 MCP 代码智能服务器——主/从多解决方案架构",
+    "output": "resharper-mcp-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [2100, 800],
+    "repository": {
+      "url": "https://github.com/zhiyangyou/resharper-mcp",
+      "revision": "78b5a02b03b5fc352e02ac3eb29b6eb47fe60ddf"
+    },
+    "views": [
+      { "id": "request-path", "label": "主请求路径", "focus": ["ai-client", "http-server", "solution-component", "psi-dispatch", "tools", "psi-engine"], "note": "一次 tools/call 从 AI 客户端穿过 HTTP 层抵达 PSI 引擎。" },
+      { "id": "peer-coordination", "label": "主/从协调", "focus": ["http-server", "shell-component", "peer-instance", "peer-http-server"], "note": "Peer 实例向 Primary 注册，Primary 代理其工具调用。" }
+    ]
+  },
+  "layout": {
+    "mode": "grid"
+  },
+  "components": [
+    { "id": "ai-client", "type": "external", "label": "AI 助手客户端", "sublabel": "Claude · MCP 客户端", "pos": [30, 320], "size": [130, 56] },
+    { "id": "http-server", "type": "backend", "label": "McpHttpServer", "sublabel": "HTTP 端点 · 路由", "tag": "127.0.0.1:23741", "pos": [350, 320], "size": [180, 66], "sources": [{ "path": "src/ReSharperMcp/McpHttpServer.cs", "label": "HTTP + 路由" }] },
+    { "id": "shell-component", "type": "backend", "label": "McpShellComponent", "sublabel": "进程级 Shell 组件", "tag": "主/从 · 看门狗", "pos": [350, 40], "size": [180, 60], "sources": [{ "path": "src/ReSharperMcp/McpShellComponent.cs", "label": "端口与主/从" }] },
+    { "id": "solution-component", "type": "backend", "label": "McpServerComponent", "sublabel": "Solution 组件 · 工具注册", "tag": "RegisterSolution", "pos": [700, 320], "size": [200, 66], "sources": [{ "path": "src/ReSharperMcp/McpServerComponent.cs", "label": "工具注册与调度" }] },
+    { "id": "psi-dispatch", "type": "backend", "label": "PSI 线程调度", "sublabel": "ReSharper 主线程", "tag": "读写锁 · 事务", "pos": [1070, 320], "size": [180, 66], "sources": [{ "path": "src/ReSharperMcp/McpServerComponent.cs", "line": 91, "end_line": 177, "label": "ExecuteOnPsiThread" }] },
+    { "id": "tools", "type": "backend", "label": "ReSharper 工具层", "sublabel": "24 个工具 · IMcpTool", "tag": "只读 / 写入", "pos": [1420, 320], "size": [180, 66], "sources": [{ "path": "src/ReSharperMcp/Tools/IMcpTool.cs", "label": "工具接口" }] },
+    { "id": "psi-engine", "type": "backend", "label": "ReSharper PSI 引擎", "sublabel": "PSI · Daemon · Caches", "pos": [1770, 320], "size": [180, 66] },
+    { "id": "peer-instance", "type": "backend", "label": "Peer Rider 实例", "sublabel": "McpShell + McpServer 组件", "pos": [350, 640], "size": [200, 66], "sources": [{ "path": "src/ReSharperMcp/McpShellComponent.cs", "label": "主/从逻辑" }] },
+    { "id": "peer-http-server", "type": "backend", "label": "McpHttpServer", "sublabel": "HTTP 端点 · 路由", "tag": "127.0.0.1:23742+", "pos": [700, 640], "size": [180, 66], "sources": [{ "path": "src/ReSharperMcp/McpHttpServer.cs", "label": "HTTP + 路由" }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Rider 进程 · Primary（首个实例）", "wraps": ["http-server", "shell-component", "solution-component", "psi-dispatch", "tools", "psi-engine"] },
+    { "kind": "region", "label": "Rider 进程 · Peer（后续实例）", "wraps": ["peer-instance", "peer-http-server"] }
+  ],
+  "connections": [
+    { "id": "client-to-http", "from": "ai-client", "to": "http-server", "label": "JSON-RPC · HTTP", "variant": "emphasis", "labelDx": 25 },
+    { "id": "shell-owns-http", "from": "shell-component", "to": "http-server", "label": "创建 · 看门狗", "labelDy": 120 },
+    { "id": "http-to-solution", "from": "http-server", "to": "solution-component", "label": "分发 tools/call", "labelDy": 56 },
+    { "id": "solution-to-psi", "from": "solution-component", "to": "psi-dispatch", "label": "ExecuteOnPsiThread" },
+    { "id": "psi-to-tools", "from": "psi-dispatch", "to": "tools", "label": "读锁 · 写锁" },
+    { "id": "tools-to-engine", "from": "tools", "to": "psi-engine", "label": "PSI API · Daemon" },
+    { "id": "peer-local-reg", "from": "peer-instance", "to": "peer-http-server", "label": "本地注册" },
+    { "id": "peer-register", "from": "peer-instance", "to": "http-server", "label": "internal/register", "variant": "dashed", "fromSide": "top", "toSide": "bottom", "labelDx": -56 },
+    { "id": "primary-proxy", "from": "http-server", "to": "peer-http-server", "label": "代理 tools/call", "variant": "dashed", "fromSide": "bottom", "toSide": "top" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "传输层", "items": ["HttpListener 绑定 127.0.0.1:23741", "手写 JSON-RPC 2.0（initialize / tools/list / tools/call）", "CORS 与 Mcp-Session-Id 会话校验"] },
+    { "dot": "emerald", "title": "ReSharper 集成", "items": ["Shell 组件为进程级单例，Server 组件每解决方案一个", "ExecuteOnPsiThread 用读写锁调度到 R# 主线程", "写入工具在 PsiTransaction 下执行"] },
+    { "dot": "amber", "title": "主/从架构", "items": ["多 Rider 实例竞争端口：首个绑定 23741，后续 23742+", "Peer 经 internal/register 上报，Primary 代理其 tools/call", "看门狗检测主端口失效并自动提升"] }
+  ]
+}

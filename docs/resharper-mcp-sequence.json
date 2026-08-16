@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "MCP 多解决方案调用时序",
+    "subtitle": "握手、Peer 注册与 tools/call 的本地执行 / 跨进程代理路径",
+    "output": "resharper-mcp-sequence.html",
+    "quality_profile": "showcase",
+    "viewBox": [860, 760],
+    "views": [
+      { "id": "handshake", "label": "握手与工具列表", "focus": ["client", "primary-http"], "note": "客户端初始化协议版本并获取工具清单。" },
+      { "id": "peer-register", "label": "Peer 注册", "focus": ["peer", "primary-http"], "note": "Peer 实例上报其端口与解决方案，Primary 记录路由。" },
+      { "id": "dual-exec", "label": "本地与代理执行", "focus": ["client", "primary-http", "server", "peer-http"], "note": "同进程执行或经 HTTP 代理到 Peer。" }
+    ]
+  },
+  "participants": [
+    { "id": "client", "type": "external", "label": "AI 客户端", "sublabel": "MCP 客户端" },
+    { "id": "primary-http", "type": "backend", "label": "McpHttpServer", "sublabel": "Primary :23741" },
+    { "id": "server", "type": "backend", "label": "Server 组件", "sublabel": "McpServerComponent" },
+    { "id": "peer", "type": "backend", "label": "Peer 实例", "sublabel": "另一 Rider 进程" },
+    { "id": "peer-http", "type": "backend", "label": "McpHttpServer", "sublabel": "Peer :23742+" }
+  ],
+  "segments": [
+    { "from": 160, "to": 315, "label": "握手" },
+    { "from": 333, "to": 400, "label": "Peer 注册" },
+    { "from": 418, "to": 650, "label": "调用与执行" }
+  ],
+  "messages": [
+    { "id": "initialize", "from": "client", "to": "primary-http", "y": 190, "label": "initialize", "variant": "emphasis" },
+    { "id": "version", "from": "primary-http", "to": "client", "y": 225, "label": "2025-03-26", "variant": "return" },
+    { "id": "tools-list", "from": "client", "to": "primary-http", "y": 272, "label": "tools/list", "variant": "default" },
+    { "id": "tools-reply", "from": "primary-http", "to": "client", "y": 308, "label": "24 个工具 + list_solutions", "variant": "return" },
+    { "id": "peer-register", "from": "peer", "to": "primary-http", "y": 355, "label": "internal/register", "variant": "dashed" },
+    { "id": "register-ok", "from": "primary-http", "to": "peer", "y": 390, "label": "ok", "variant": "return" },
+    { "id": "local-call", "from": "client", "to": "primary-http", "y": 438, "label": "tools/call · 本地", "variant": "emphasis" },
+    { "id": "local-handler", "from": "primary-http", "to": "server", "y": 480, "label": "ExecuteOnPsiThread", "variant": "default" },
+    { "id": "local-result", "from": "server", "to": "primary-http", "y": 515, "label": "CallToolResult", "variant": "return" },
+    { "id": "local-reply", "from": "primary-http", "to": "client", "y": 543, "label": "结果", "variant": "return" },
+    { "id": "peer-call", "from": "client", "to": "primary-http", "y": 578, "label": "tools/call · solutionName", "variant": "emphasis" },
+    { "id": "proxy", "from": "primary-http", "to": "peer-http", "y": 615, "label": "代理转发", "variant": "dashed" },
+    { "id": "proxy-result", "from": "peer-http", "to": "primary-http", "y": 643, "label": "结果透传", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "primary-http", "from": 190, "to": 308, "type": "backend" },
+    { "participant": "primary-http", "from": 438, "to": 543, "type": "backend" },
+    { "participant": "server", "from": 480, "to": 515, "type": "backend" },
+    { "participant": "primary-http", "from": 578, "to": 650, "type": "backend" },
+    { "participant": "peer-http", "from": 615, "to": 643, "type": "backend" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "握手", "items": ["initialize 协商协议版本，兼容 2024-11-05", "tools/list 附带 list_solutions Meta 工具", "每个工具 schema 注入 solutionName 可选参数"] },
+    { "dot": "emerald", "title": "Peer 注册", "items": ["Peer 经 internal/register 上报端口与工具", "Primary 维护路由表，失效自动移除", "单解决方案时无需 solutionName"] },
+    { "dot": "amber", "title": "双执行路径", "items": ["本地目标在同进程 PSI 线程执行", "Peer 目标经 HTTP 代理到其端口", "代理失败返回不可用并清理过期注册"] }
+  ]
+}

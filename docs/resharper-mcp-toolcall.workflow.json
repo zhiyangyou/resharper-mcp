@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "tools/call 请求处理流程",
+    "subtitle": "McpHttpServer 的解决方案路由与双路径执行——本地 PSI 线程或 Peer 进程代理",
+    "output": "resharper-mcp-toolcall-workflow.html",
+    "quality_profile": "showcase",
+    "viewBox": [720, 620],
+    "views": [
+      { "id": "local-path", "label": "本地执行路径", "focus": ["client", "route", "target", "local", "result", "client-result"], "note": "单解决方案或本地目标的调用在同一进程内完成。" },
+      { "id": "peer-path", "label": "Peer 代理路径", "focus": ["client", "route", "target", "peer", "result", "client-result"], "note": "目标在另一 Rider 实例时，Primary 代理请求到 Peer 端口。" },
+      { "id": "error-recovery", "label": "错误与失效恢复", "focus": ["target", "error", "client-result"], "note": "名称无法解析、Peer 失效等失败路径统一返回 ToolError。" }
+    ]
+  },
+  "lanes": [
+    { "id": "client", "label": "AI 客户端" },
+    { "id": "primary", "label": "McpHttpServer（Primary）" },
+    { "id": "exec", "label": "执行层" }
+  ],
+  "phases": [
+    { "id": "intake", "label": "接收", "fromCol": 0, "toCol": 0 },
+    { "id": "routing", "label": "路由", "fromCol": 1, "toCol": 2, "variant": "emphasis" },
+    { "id": "execution", "label": "执行与返回", "fromCol": 3, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["client", "route", "target", "local", "result", "client-result"],
+  "nodes": [
+    { "id": "client", "lane": "client", "col": 0, "type": "external", "label": "AI 客户端", "sublabel": "MCP tools/call", "tag": "外部" },
+    { "id": "client-result", "lane": "client", "col": 5, "type": "frontend", "label": "收到结果", "sublabel": "ContentBlock", "tag": "MCP" },
+    { "id": "error", "lane": "client", "col": 2, "type": "security", "label": "错误处理", "sublabel": "ToolError", "tag": "失败路径" },
+    { "id": "route", "lane": "primary", "col": 0, "type": "backend", "label": "解析路由", "sublabel": "HandleToolCall", "tag": "solutionName?" },
+    { "id": "target", "lane": "primary", "col": 2, "type": "security", "label": "选定目标", "sublabel": "本地或 Peer", "tag": "按名称/路径" },
+    { "id": "result", "lane": "primary", "col": 4, "type": "messagebus", "label": "序列化结果", "sublabel": "CallToolResult", "tag": "JSON-RPC" },
+    { "id": "local", "lane": "exec", "col": 2, "type": "backend", "label": "本地执行", "sublabel": "PSI 线程 · 读写锁", "tag": "120s 超时" },
+    { "id": "peer", "lane": "exec", "col": 3, "type": "backend", "label": "Peer 执行", "sublabel": "HTTP 转发", "tag": "ProxyToPeer" }
+  ],
+  "edges": [
+    { "id": "client-to-route", "from": "client", "to": "route", "label": "tools/call", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop", "labelDy": 15 },
+    { "id": "route-to-target", "from": "route", "to": "target", "label": "匹配" },
+    { "id": "target-local", "from": "target", "to": "local", "label": "本地", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop", "labelAt": [318, 298] },
+    { "id": "target-peer", "from": "target", "to": "peer", "label": "Peer", "variant": "emphasis", "fromSide": "right", "toSide": "top", "via": [[430, 243]], "labelDy": 8 },
+    { "id": "local-result", "from": "local", "to": "result", "label": "结果", "role": "return", "fromSide": "bottom", "toSide": "bottom", "via": [[300, 415], [500, 415]], "labelAt": [400, 438] },
+    { "id": "peer-result", "from": "peer", "to": "result", "label": "结果", "role": "return", "fromSide": "right", "toSide": "right", "route": "outside-right", "labelDx": 24, "labelDy": -12 },
+    { "id": "result-client", "from": "result", "to": "client-result", "label": "响应", "role": "return", "fromSide": "top", "toSide": "bottom", "via": [[500, 180], [625, 180]], "labelDy": 8 },
+    { "id": "target-error", "from": "target", "to": "error", "label": "未找到/歧义", "role": "error", "fromSide": "top", "toSide": "bottom", "route": "drop", "labelDx": 26, "labelDy": 26 },
+    { "id": "error-exit", "from": "error", "to": "client-result", "label": "ToolError", "role": "error", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "路由规则", "items": ["list_solutions 是 Meta 工具，直接处理", "精确名称 → 路径段 → 唯一匹配逐级降级", "单解决方案时自动路由，无需 solutionName"] },
+    { "dot": "emerald", "title": "双执行路径", "items": ["本地目标在同一进程的 PSI 线程执行", "Peer 目标经 HTTP 代理到其端口", "写入工具在写锁 + PsiTransaction 下运行"] },
+    { "dot": "rose", "title": "失败恢复", "items": ["无解决方案、名称歧义、未知工具返回 ToolError", "Peer 不可达时自动移除过期注册", "120s 超时取消调度并返回超时错误"] }
+  ]
+}

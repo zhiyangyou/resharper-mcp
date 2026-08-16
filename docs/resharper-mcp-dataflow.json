@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "ReSharper MCP 代码智能数据流",
+    "subtitle": "从 PSI 引擎经工具层到 AI 客户端的分析管道——只读主轨与底部写入环",
+    "output": "resharper-mcp-dataflow.html",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 760],
+    "views": [
+      { "id": "analysis-path", "label": "只读分析管道", "focus": ["code", "psi", "read-tools", "http", "ai"], "note": "跟随代码从源文件经 PSI 分析到 AI 客户端的只读路径。" },
+      { "id": "write-path", "label": "写入修改路径", "focus": ["ai", "http", "write-tools", "psi"], "note": "AI 客户端发起重命名、生成等写入操作，经底部通道回到 PSI 树。" },
+      { "id": "diagnostics-path", "label": "诊断与修复", "focus": ["daemon", "read-tools", "write-tools"], "note": "Daemon 高亮驱动诊断查询与快速修复应用。" }
+    ]
+  },
+  "stages": [
+    { "label": "代码源" },
+    { "label": "PSI 引擎" },
+    { "label": "工具层" },
+    { "label": "MCP 服务" },
+    { "label": "客户端" }
+  ],
+  "nodes": [
+    { "id": "code", "type": "database", "label": "代码源", "sublabel": "C# / F# / VB", "stage": 0, "row": 0, "tag": "解决方案" },
+    { "id": "psi", "type": "backend", "label": "PSI 引擎", "sublabel": "PSI 树 · 符号缓存", "stage": 1, "row": 0, "tag": "索引" },
+    { "id": "read-tools", "type": "backend", "label": "只读工具", "sublabel": "19 个 · find_usages", "stage": 2, "row": 0, "tag": "查询" },
+    { "id": "http", "type": "messagebus", "label": "McpHttpServer", "sublabel": "JSON-RPC · 路由", "stage": 3, "row": 0, "tag": ":23741" },
+    { "id": "ai", "type": "external", "label": "AI 客户端", "sublabel": "Claude · MCP", "stage": 4, "row": 0, "tag": "工具调用" },
+    { "id": "daemon", "type": "backend", "label": "Daemon", "sublabel": "后台高亮", "stage": 2, "row": 3, "tag": "异步" },
+    { "id": "write-tools", "type": "security", "label": "写入工具", "sublabel": "5 个 · rename", "stage": 3, "row": 3, "tag": "事务" }
+  ],
+  "flows": [
+    { "id": "code-to-psi", "from": "code", "to": "psi", "label": "PSI 解析", "classification": "索引", "variant": "emphasis", "route": "straight" },
+    { "id": "psi-to-read", "from": "psi", "to": "read-tools", "label": "符号/引用/层级", "classification": "只读分析", "variant": "emphasis", "route": "straight" },
+    { "id": "read-to-http", "from": "read-tools", "to": "http", "label": "查询结果", "classification": "结果", "variant": "emphasis", "route": "straight" },
+    { "id": "http-to-ai", "from": "http", "to": "ai", "label": "JSON-RPC 结果", "classification": "响应", "variant": "emphasis", "route": "straight" },
+    { "id": "daemon-to-read", "from": "daemon", "to": "read-tools", "label": "诊断高亮", "classification": "daemon", "variant": "dashed", "fromSide": "top", "toSide": "bottom", "route": "vertical-channel" },
+    { "id": "ai-to-http", "from": "ai", "to": "http", "label": "tools/call", "classification": "请求", "variant": "dashed", "route": "bottom-channel" },
+    { "id": "http-to-write", "from": "http", "to": "write-tools", "label": "写入调用", "classification": "变更", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "bottom-channel" },
+    { "id": "write-to-psi", "from": "write-tools", "to": "psi", "label": "PSI 修改", "classification": "写事务", "variant": "security", "route": "bottom-channel" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "分析管道", "items": ["代码经 PSI 解析索引到符号缓存", "工具层消费符号、引用与层级数据", "结果经 JSON-RPC 返回 AI 客户端"] },
+    { "dot": "emerald", "title": "写入路径", "items": ["AI 客户端发起 rename / generate 等变更", "写入工具在 PSI 事务下执行", "修改反馈回 PSI 树并提交文档"] },
+    { "dot": "rose", "title": "诊断循环", "items": ["Daemon 后台持续高亮代码", "get_diagnostics 读取高亮结果", "apply_quick_fix 应用建议修复"] }
+  ]
+}
