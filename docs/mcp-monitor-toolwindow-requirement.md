@@ -297,6 +297,31 @@ McpMonitorClient（传输层）──fetchMonitor──► McpMonitorService（�
 6. **不加依赖**：前端 `rider("2025.3")` 已含全部所需 API 与 Jackson；后端 net472 + Newtonsoft.Json 已具备。
 7. **线程安全**：后端缓冲所有方法锁保护；工具执行在 `_lock` 外；SSE 推送经 sink 自己的锁写、在缓冲锁外执行。前端所有 UI 变更回 EDT。
 8. **前后端契约稳定**：`RequestLogEntry.ToJObject()` 统一序列化，monitor 响应与 SSE 事件字段一致；前端 `McpModel` 与之一一对应。
+9. **所有需求和迭代都应被测试，并通过 Sub agent 进行 review**：每个功能点需至少包含编译验证 + 运行验证；每次迭代的代码改动在合并前由独立的 Sub agent 进行代码 review，确认无回归、契约一致后再合入。
+10. **每次迭代完成后自动 Git Commit 与 Push**：每完成一个迭代，无需询问用户，直接执行 `git add` + `git commit` + `git push`，将本次迭代的代码与需求文档改动一并提交。
+
+---
+
+## 6.1 迭代记录
+
+### 迭代 1（2026-08-16）——面板状态与展示增强
+
+**需求**：
+- 状态栏的在线圆点改为绿色；离线红色、未知灰色。
+- 状态栏显示当前 MCP 数量（本地解决方案数 + Peer 数）。
+- 状态栏显示当前是 Primary 还是 Peer。
+- 请求表格新增一列表示单次请求成功/失败（成功绿色 ✓，失败红色 ✗）。
+- **新增**「MCP 客户端」Tab：显示当前连接 MCP 的客户端信息（clientInfo + 远程地址 + 活动状态）。
+
+**实现**：
+- 后端新增 `ClientSessionTracker.cs`（按 clientInfo+IP 追踪会话、活动心跳、30s 超时标记离线）；`internal/monitor` 新增 `clientCount`/`clients`/`localSolutions`/`peerSolutions` 字段。
+- 前端 `McpModel`/`McpMonitorClient` 解析新字段；`McpToolWindowPanel` 状态条三色圆点 + MCP 数量 + 主从显示 + 客户端 Tab；`McpLogsTableModel` 新增 Status 列；新增 `McpStatusColumnRenderer`、`McpClientsTableModel`。
+
+**决策**：
+- 状态点颜色：在线绿 / 离线红 / 未知灰。
+- MCP 数量：本地解决方案数 + Peer 进程数。
+- 成败列：新列，成功绿色 ✓ / 失败红色 ✗。
+- 客户端识别：按 `clientInfo`（name+version）+ 远程 IP；生命周期：活动心跳 + 30s 超时标记离线。
 
 ---
 

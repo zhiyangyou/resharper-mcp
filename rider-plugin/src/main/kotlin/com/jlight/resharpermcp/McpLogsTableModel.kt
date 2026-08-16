@@ -7,9 +7,12 @@ import java.util.Date
 /**
  * Table model for a request-log tab. Filters the shared entry list by [filter] and renders
  * table-row summaries (previews). Full args/result live in the entry and are shown in the detail dialog.
+ *
+ * Column layout:
+ *   0 Time | 1 Tool | 2 Duration | 3 Target | 4 Source | 5 Status (✓/✗) | 6 Result | 7 Error
  */
 class McpLogsTableModel(private val filter: (RequestLogEntry) -> Boolean) : AbstractTableModel() {
-    private val columns = listOf("Time", "Tool", "Duration", "Target", "Source", "Result", "Error")
+    private val columns = listOf("Time", "Tool", "Duration", "Target", "Source", "Status", "Result", "Error")
     private val rows = mutableListOf<RequestLogEntry>()
 
     fun setEntries(all: List<RequestLogEntry>) {
@@ -40,8 +43,9 @@ class McpLogsTableModel(private val filter: (RequestLogEntry) -> Boolean) : Abst
                 entry.viaPrimary -> "viaPrimary"
                 else -> "direct"
             }
-            5 -> entry.resultPreview.ifEmpty { "—" }
-            6 -> entry.errorText ?: (if (entry.isError) "error" else "")
+            5 -> if (entry.isError) "✗" else "✓"
+            6 -> entry.resultPreview.ifEmpty { "—" }
+            7 -> entry.errorText ?: (if (entry.isError) "error" else "")
             else -> null
         }
     }

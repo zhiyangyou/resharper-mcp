@@ -27,6 +27,7 @@ namespace ReSharperMcp
         // Owned at process level so log history survives promotion (a peer that becomes primary
         // constructs a fresh McpHttpServer but must keep the same request-log buffer).
         private readonly RequestLogBuffer _requestLogs = new RequestLogBuffer();
+        private readonly ClientSessionTracker _clientSessions = new ClientSessionTracker();
 
         public int Port => _server?.Port ?? 0;
 
@@ -40,7 +41,7 @@ namespace ReSharperMcp
             for (var attempt = 0; attempt < MaxPortAttempts; attempt++)
             {
                 var tryPort = basePort + attempt;
-                var tryServer = new McpHttpServer(tryPort, logger, _requestLogs);
+                var tryServer = new McpHttpServer(tryPort, logger, _requestLogs, _clientSessions);
                 try
                 {
                     tryServer.Start();
@@ -266,7 +267,7 @@ namespace ReSharperMcp
 
                 try
                 {
-                    var newServer = new McpHttpServer(_primaryPort, _logger, _requestLogs);
+                    var newServer = new McpHttpServer(_primaryPort, _logger, _requestLogs, _clientSessions);
                     newServer.Start();
                     newServer.IsPrimary = true;
 

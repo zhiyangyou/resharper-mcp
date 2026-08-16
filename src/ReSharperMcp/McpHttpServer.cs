@@ -20,6 +20,7 @@ namespace ReSharperMcp
         private readonly Dictionary<string, SolutionRegistration> _solutions = new Dictionary<string, SolutionRegistration>();
         private readonly Dictionary<string, PeerRegistration> _peers = new Dictionary<string, PeerRegistration>();
         private readonly RequestLogBuffer _requestLogs;
+        private readonly ClientSessionTracker _clientSessions;
         private readonly string _sessionId;
         private Thread _listenerThread;
         private volatile bool _running;
@@ -27,11 +28,12 @@ namespace ReSharperMcp
         public int Port { get; }
         public bool IsPrimary { get; set; }
 
-        public McpHttpServer(int port, ILogger logger, RequestLogBuffer requestLogs)
+        public McpHttpServer(int port, ILogger logger, RequestLogBuffer requestLogs, ClientSessionTracker clientSessions)
         {
             Port = port;
             _logger = logger;
             _requestLogs = requestLogs;
+            _clientSessions = clientSessions;
             _sessionId = Guid.NewGuid().ToString("N");
             _listener = new HttpListener();
             _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
@@ -292,6 +294,23 @@ namespace ReSharperMcp
             _logger.Verbose($"MCP request: {body}");
 
             var request = JsonConvert.DeserializeObject<JsonRpcRequest>(body);
+            var remoteAddress = context.Request.RemoteEndPoint?.Address?.ToString();
+
+            // Track the connecting client. initialize carries clientInfo (name+version); other
+            // client requests carry none, so bump any session already seen from this address instead.
+            // Protocol-level internal/* requests are excluded — the monitor polls internal/monitor
+            // every few seconds and must not inflate client activity or keep sessions alive.
+            if (request.Method != null && !request.Method.StartsWith("internal/"))
+            {
+                var clientInfo = request.Params?["clientInfo"];
+                if (clientInfo != null)
+                    _clientSessions.RecordActivity(
+                        clientInfo["name"]?.ToString() ?? "unknown",
+                        clientInfo["version"]?.ToString(),
+                        remoteAddress);
+                else
+                    _clientSessions.RecordActivityByAddress(remoteAddress);
+            }
 
             // Monitor envelope — captures timing, request, and result for the request log
             var entry = _requestLogs.Begin();
@@ -896,7 +915,7 @@ namespace ReSharperMcp
                 {
                     ["port"] = Port,
                     ["role"] = IsPrimary ? "primary" : "peer",
-                    ["solutions"] = BuildSolutionsArray()
+                    ["solutions"] = BuildSolutionsArray(includePeers: true)
                 }
             };
         }
@@ -917,6 +936,10 @@ namespace ReSharperMcp
 
             _requestLogs.GetStats(out var counts, out var errors, out var nextIndex);
 
+            var clients = new JArray();
+            foreach (var session in _clientSessions.Snapshot())
+                clients.Add(session.ToJObject());
+
             return new JsonRpcResponse
             {
                 Id = request.Id,
@@ -927,6 +950,8 @@ namespace ReSharperMcp
                     ["online"] = true,
                     ["serverTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     ["nextIndex"] = nextIndex,
+                    ["clientCount"] = _clientSessions.OnlineCount(),
+                    ["clients"] = clients,
                     ["counts"] = new JObject
                     {
                         ["local"] = counts[(int)RequestKind.Local],
@@ -934,13 +959,14 @@ namespace ReSharperMcp
                         ["other"] = counts[(int)RequestKind.Other],
                         ["errors"] = errors
                     },
-                    ["solutions"] = BuildSolutionsArray(),
+                    ["localSolutions"] = BuildSolutionsArray(includePeers: false),
+                    ["solutions"] = BuildSolutionsArray(includePeers: true),
                     ["logs"] = logs
                 }
             };
         }
 
-        private JArray BuildSolutionsArray()
+        private JArray BuildSolutionsArray(bool includePeers)
         {
             var solutions = new JArray();
             lock (_lock)
@@ -954,13 +980,16 @@ namespace ReSharperMcp
                     });
                 }
 
-                foreach (var p in _peers.Values)
+                if (includePeers)
                 {
-                    solutions.Add(new JObject
+                    foreach (var p in _peers.Values)
                     {
-                        ["name"] = p.SolutionName,
-                        ["path"] = p.SolutionPath
-                    });
+                        solutions.Add(new JObject
+                        {
+                            ["name"] = p.SolutionName,
+                            ["path"] = p.SolutionPath
+                        });
+                    }
                 }
             }
             return solutions;

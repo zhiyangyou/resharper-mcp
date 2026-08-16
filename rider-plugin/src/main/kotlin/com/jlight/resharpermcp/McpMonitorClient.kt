@@ -124,11 +124,19 @@ class McpMonitorClient {
 
     private fun parseSnapshot(json: String): MonitorSnapshot {
         val result = mapper.readTree(json)["result"] ?: throw IllegalStateException("no result")
+        val solutions = result["solutions"].map { it["name"].asText() }
+        val localSolutions = result["localSolutions"]?.map { it["name"].asText() } ?: solutions
+        // Peer count = total minus local. (The backend's "solutions" array is local+peer combined.)
+        val peerSolutions = solutions.filter { it !in localSolutions }
         val state = MonitorState(
             online = true,
             role = Role.valueOf(result["role"].asText().uppercase()),
             port = result["port"].asInt(),
-            solutions = result["solutions"].map { it["name"].asText() },
+            solutions = solutions,
+            localSolutions = localSolutions,
+            peerSolutions = peerSolutions,
+            clientCount = result["clientCount"].asInt(0),
+            clients = result["clients"].map { parseClient(it) },
             nextIndex = result["nextIndex"].asLong(),
             counts = result["counts"].fields().asSequence().associate { it.key to it.value.asLong() }
         )
@@ -136,6 +144,19 @@ class McpMonitorClient {
         result["nextIndex"].asLong().let { if (it > lastIndex) lastIndex = it }
         connected = true
         return MonitorSnapshot(state, logs)
+    }
+
+    private fun parseClient(node: JsonNode): ClientSession {
+        return ClientSession(
+            clientName = node["clientName"].asText("unknown"),
+            clientVersion = node["clientVersion"].asText(""),
+            remoteAddress = node["remoteAddress"].asText(""),
+            firstSeen = node["firstSeen"].asLong(),
+            lastActive = node["lastActive"].asLong(),
+            requestCount = node["requestCount"].asLong(),
+            online = node["online"].asBoolean(false),
+            offlineSince = node["offlineSince"].asLong(0)
+        )
     }
 
     private fun parseLog(node: JsonNode): RequestLogEntry? {

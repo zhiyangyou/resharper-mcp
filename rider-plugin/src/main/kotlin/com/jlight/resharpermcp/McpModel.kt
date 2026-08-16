@@ -2,22 +2,37 @@ package com.jlight.resharpermcp
 
 /**
  * Shared data model mirroring the backend's internal/monitor JSON contract.
- * Field names match RequestLogEntry.ToJObject() in the .NET backend.
+ * Field names match RequestLogEntry.ToJObject() and ClientSession.ToJObject() in the .NET backend.
  */
 enum class Role { PRIMARY, PEER, UNKNOWN }
 
 enum class LogKind { LOCAL, FORWARDED, OTHER }
+
+data class ClientSession(
+    val clientName: String,
+    val clientVersion: String,
+    val remoteAddress: String,
+    val firstSeen: Long,
+    val lastActive: Long,
+    val requestCount: Long,
+    val online: Boolean,
+    val offlineSince: Long
+)
 
 data class MonitorState(
     val online: Boolean,
     val role: Role,
     val port: Int,
     val solutions: List<String>,
+    val localSolutions: List<String>,
+    val peerSolutions: List<String>,
+    val clientCount: Int,
+    val clients: List<ClientSession>,
     val nextIndex: Long,
     val counts: Map<String, Long>
 ) {
     companion object {
-        val offline = MonitorState(false, Role.UNKNOWN, 0, emptyList(), 0, emptyMap())
+        val offline = MonitorState(false, Role.UNKNOWN, 0, emptyList(), emptyList(), emptyList(), 0, emptyList(), 0, emptyMap())
     }
 }
 
