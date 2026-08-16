@@ -1,45 +1,50 @@
 package com.jlight.resharpermcp
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.PopupStep
 import com.intellij.openapi.ui.popup.util.BaseListPopupStep
 import com.intellij.openapi.wm.StatusBar
 import com.intellij.openapi.wm.StatusBarWidget
-import com.intellij.util.concurrency.AppExecutorUtil
+import com.intellij.util.Consumer
 import org.jetbrains.annotations.Nls
 import java.awt.Component
 import java.awt.event.MouseEvent
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URI
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
-import com.intellij.util.Consumer
 
-class McpStatusBarWidget : StatusBarWidget, StatusBarWidget.TextPresentation {
+class McpStatusBarWidget(private val project: Project) : StatusBarWidget, StatusBarWidget.TextPresentation {
     companion object {
         const val ID = "ReSharperMcp.StatusBar"
-        private const val POLL_INTERVAL_SECONDS = 5L
-        private const val DEFAULT_PORT = 23741
     }
 
     private var statusBar: StatusBar? = null
-    private val port: Int = resolvePort()
-    private var pollFuture: ScheduledFuture<*>? = null
+    private var subscription: AutoCloseable? = null
 
-    // Cached status — written from pooled thread, read from EDT
-    @Volatile private var connected: Boolean = false
-    @Volatile private var role: String = "unknown"
-    @Volatile private var solutions: List<SolutionInfo> = emptyList()
+    // Cached status — read on EDT from the shared service
+    private var connected: Boolean = false
+    private var role: String = "unknown"
+    private var solutions: List<String> = emptyList()
+    private var port: Int = 0
 
     override fun ID(): String = ID
 
     override fun install(statusBar: StatusBar) {
         this.statusBar = statusBar
-        pollFuture = AppExecutorUtil.getAppScheduledExecutorService()
-            .scheduleWithFixedDelay(::poll, 0, POLL_INTERVAL_SECONDS, TimeUnit.SECONDS)
+        val service = project.service<McpMonitorService>()
+        subscription = service.register { state, _ ->
+            ApplicationManager.getApplication().invokeLater {
+                connected = state.online
+                role = when (state.role) {
+                    Role.PRIMARY -> "primary"
+                    Role.PEER -> "peer"
+                    else -> "unknown"
+                }
+                solutions = state.solutions
+                port = state.port
+                statusBar?.updateWidget(ID)
+            }
+        }
     }
 
     override fun getPresentation(): StatusBarWidget.WidgetPresentation = this
@@ -70,7 +75,7 @@ class McpStatusBarWidget : StatusBarWidget, StatusBarWidget.TextPresentation {
             if (solutions.isNotEmpty()) {
                 items.add(PopupItem("───", false))
                 items.add(PopupItem("Solutions:", false))
-                solutions.forEach { items.add(PopupItem("  ${it.name}", false)) }
+                solutions.forEach { items.add(PopupItem("  $it", false)) }
             }
             items.add(PopupItem("───", false))
             items.add(PopupItem("Restart Server", true))
@@ -87,7 +92,7 @@ class McpStatusBarWidget : StatusBarWidget, StatusBarWidget.TextPresentation {
 
                 override fun onChosen(selectedValue: PopupItem, finalChoice: Boolean): PopupStep<*>? {
                     if (selectedValue.text == "Restart Server") {
-                        doRestart()
+                        project.service<McpMonitorService>().restartServer()
                     }
                     return FINAL_CHOICE
                 }
@@ -97,112 +102,11 @@ class McpStatusBarWidget : StatusBarWidget, StatusBarWidget.TextPresentation {
         popup.showUnderneathOf(component)
     }
 
-    // --- Polling ---
-
-    private fun poll() {
-        try {
-            val response = httpPost(
-                """{"jsonrpc":"2.0","id":1,"method":"internal/status","params":{}}"""
-            )
-            if (response != null) {
-                parseStatus(response)
-                connected = true
-            } else {
-                connected = false
-                solutions = emptyList()
-            }
-        } catch (_: Exception) {
-            connected = false
-            solutions = emptyList()
-        }
-
-        // Update widget text on EDT
-        ApplicationManager.getApplication().invokeLater {
-            statusBar?.updateWidget(ID)
-        }
-    }
-
-    private fun parseStatus(json: String) {
-        try {
-            val resultStart = json.indexOf("\"result\"")
-            if (resultStart < 0) return
-
-            // Extract role
-            val roleMatch = Regex("\"role\"\\s*:\\s*\"(\\w+)\"").find(json)
-            if (roleMatch != null) {
-                role = roleMatch.groupValues[1]
-            }
-
-            // Extract solution names from the "solutions" array
-            val solutionsList = mutableListOf<SolutionInfo>()
-            val namePattern = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"")
-            val solutionsStart = json.indexOf("\"solutions\"")
-            if (solutionsStart >= 0) {
-                val solutionsJson = json.substring(solutionsStart)
-                namePattern.findAll(solutionsJson).forEach { match ->
-                    solutionsList.add(SolutionInfo(match.groupValues[1]))
-                }
-            }
-            solutions = solutionsList
-        } catch (_: Exception) {
-            // Parse error — keep previous state
-        }
-    }
-
-    // --- Restart ---
-
-    private fun doRestart() {
-        AppExecutorUtil.getAppExecutorService().submit {
-            try {
-                httpPost("""{"jsonrpc":"2.0","id":1,"method":"internal/restart","params":{}}""")
-                connected = false
-                ApplicationManager.getApplication().invokeLater {
-                    statusBar?.updateWidget(ID)
-                }
-            } catch (_: Exception) {
-                // Will show offline on next poll
-            }
-        }
-    }
-
-    // --- HTTP ---
-
-    private fun httpPost(body: String): String? {
-        val url = URI("http://127.0.0.1:$port/").toURL()
-        val conn = url.openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.doOutput = true
-            conn.connectTimeout = 2000
-            conn.readTimeout = 2000
-
-            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-
-            if (conn.responseCode != 200) return null
-
-            return BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { it.readText() }
-        } finally {
-            conn.disconnect()
-        }
-    }
-
     // --- Lifecycle ---
 
     override fun dispose() {
-        pollFuture?.cancel(false)
+        subscription?.close()
     }
 
-    // --- Helpers ---
-
-    private fun resolvePort(): Int {
-        val envPort = System.getenv("RESHARPER_MCP_PORT")
-        if (!envPort.isNullOrBlank()) {
-            envPort.toIntOrNull()?.let { return it }
-        }
-        return DEFAULT_PORT
-    }
-
-    private data class SolutionInfo(val name: String)
     private data class PopupItem(val text: String, val actionable: Boolean)
 }

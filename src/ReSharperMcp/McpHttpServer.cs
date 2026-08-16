@@ -19,6 +19,7 @@ namespace ReSharperMcp
         private readonly object _lock = new object();
         private readonly Dictionary<string, SolutionRegistration> _solutions = new Dictionary<string, SolutionRegistration>();
         private readonly Dictionary<string, PeerRegistration> _peers = new Dictionary<string, PeerRegistration>();
+        private readonly RequestLogBuffer _requestLogs;
         private readonly string _sessionId;
         private Thread _listenerThread;
         private volatile bool _running;
@@ -26,10 +27,11 @@ namespace ReSharperMcp
         public int Port { get; }
         public bool IsPrimary { get; set; }
 
-        public McpHttpServer(int port, ILogger logger)
+        public McpHttpServer(int port, ILogger logger, RequestLogBuffer requestLogs)
         {
             Port = port;
             _logger = logger;
+            _requestLogs = requestLogs;
             _sessionId = Guid.NewGuid().ToString("N");
             _listener = new HttpListener();
             _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
@@ -291,20 +293,44 @@ namespace ReSharperMcp
 
             var request = JsonConvert.DeserializeObject<JsonRpcRequest>(body);
 
+            // Monitor envelope — captures timing, request, and result for the request log
+            var entry = _requestLogs.Begin();
+            entry.Method = request.Method;
+            entry.ViaPrimary = context.Request.Headers["Mcp-Proxy"] == "1";
+            if (request.Method == "tools/call")
+            {
+                entry.Tool = request.Params?["name"]?.ToString();
+                var args = request.Params?["arguments"] as JObject;
+                if (args != null)
+                {
+                    entry.Args = RequestLogBuffer.Truncate(args.ToString(Formatting.None), RequestLogBuffer.MaxStoredLength);
+                    entry.ArgsPreview = RequestLogBuffer.Truncate(entry.Args, RequestLogBuffer.PreviewLength);
+                    entry.ArgsPreviewTruncated = entry.Args.Length > RequestLogBuffer.PreviewLength;
+                }
+            }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             // JSON-RPC notifications have no id — respond with 202 Accepted, no body
             if (request.Id == null && request.Method != null)
             {
-                ProcessRequest(request); // still process for side effects
+                ProcessRequest(request, entry); // still process for side effects
+                entry.Kind = RequestKind.Other;
+                entry.DurationMs = sw.ElapsedMilliseconds;
+                _requestLogs.Commit(entry);
                 context.Response.StatusCode = 202;
                 context.Response.Close();
                 return;
             }
 
-            var response = ProcessRequest(request);
+            var response = ProcessRequest(request, entry);
             var responseJson = JsonConvert.SerializeObject(response, Formatting.None,
                 new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
 
             _logger.Verbose($"MCP response: {responseJson}");
+
+            entry.DurationMs = sw.ElapsedMilliseconds;
+            FinalizeResult(entry, response, responseJson);
+            _requestLogs.Commit(entry);
 
             var responseBytes = Encoding.UTF8.GetBytes(responseJson);
             context.Response.ContentType = "application/json";
@@ -314,9 +340,41 @@ namespace ReSharperMcp
         }
 
         /// <summary>
-        /// Streamable HTTP: GET opens an SSE stream for server-to-client notifications.
-        /// We don't currently push server-initiated messages, but keep the stream alive
-        /// so clients that probe with GET see a valid SSE endpoint.
+        /// Fills a monitor entry's result fields from the JSON-RPC response. Kind is left as set
+        /// by <see cref="HandleToolCall"/> (Local/Forwarded) or defaults to Other.
+        /// </summary>
+        private static void FinalizeResult(RequestLogEntry entry, JsonRpcResponse response, string responseJson)
+        {
+            if (response.Result is CallToolResult toolResult)
+            {
+                var text = string.Join("\n", toolResult.Content.Select(c => c.Text ?? ""));
+                entry.Result = RequestLogBuffer.Truncate(text, RequestLogBuffer.MaxStoredLength);
+                entry.ResultPreview = RequestLogBuffer.Truncate(entry.Result, RequestLogBuffer.PreviewLength);
+                entry.ResultPreviewTruncated = entry.Result.Length > RequestLogBuffer.PreviewLength;
+                entry.IsError = toolResult.IsError;
+                if (toolResult.IsError)
+                    entry.ErrorText = RequestLogBuffer.Truncate(entry.Result, RequestLogBuffer.PreviewLength);
+            }
+            else if (response.Error != null)
+            {
+                entry.IsError = true;
+                entry.ErrorText = RequestLogBuffer.Truncate(response.Error.Message, RequestLogBuffer.PreviewLength);
+                entry.Result = RequestLogBuffer.Truncate(response.Error.Message, RequestLogBuffer.MaxStoredLength);
+                entry.ResultPreview = entry.ErrorText;
+                entry.ResultPreviewTruncated = entry.Result.Length > RequestLogBuffer.PreviewLength;
+            }
+            else
+            {
+                entry.Result = RequestLogBuffer.Truncate(responseJson, RequestLogBuffer.MaxStoredLength);
+                entry.ResultPreview = RequestLogBuffer.Truncate(entry.Result, RequestLogBuffer.PreviewLength);
+                entry.ResultPreviewTruncated = entry.Result.Length > RequestLogBuffer.PreviewLength;
+            }
+        }
+
+        /// <summary>
+        /// Streamable HTTP: GET opens an SSE stream. Besides the keepalive heartbeats it now pushes
+        /// <c>event: log</c> frames for every committed monitor entry, so connected frontends get
+        /// live request-log updates without polling.
         /// </summary>
         private void HandleGetSse(HttpListenerContext context)
         {
@@ -330,20 +388,17 @@ namespace ReSharperMcp
                 {
                     writer.AutoFlush = true;
 
-                    // Initial SSE comment to confirm the connection is established
-                    writer.Write(": connected\n\n");
-
-                    // Keep-alive loop until server stops or client disconnects
-                    while (_running)
+                    var sink = new SseSink(writer);
+                    using (var subscription = _requestLogs.Subscribe(sink.Push))
                     {
-                        Thread.Sleep(15000);
-                        try
+                        // Initial SSE comment to confirm the connection is established
+                        writer.Write(": connected\n\n");
+
+                        // Keep-alive loop until server stops or client disconnects
+                        while (_running && !sink.IsDead)
                         {
-                            writer.Write(": keepalive\n\n");
-                        }
-                        catch
-                        {
-                            break; // Client disconnected
+                            Thread.Sleep(15000);
+                            sink.WriteKeepalive();
                         }
                     }
                 }
@@ -368,7 +423,7 @@ namespace ReSharperMcp
             context.Response.Close();
         }
 
-        private JsonRpcResponse ProcessRequest(JsonRpcRequest request)
+        private JsonRpcResponse ProcessRequest(JsonRpcRequest request, RequestLogEntry entry)
         {
             switch (request.Method)
             {
@@ -395,7 +450,7 @@ namespace ReSharperMcp
                     return HandleToolsList(request);
 
                 case "tools/call":
-                    return HandleToolCall(request);
+                    return HandleToolCall(request, entry);
 
                 case "internal/register":
                     return HandlePeerRegister(request);
@@ -405,6 +460,9 @@ namespace ReSharperMcp
 
                 case "internal/status":
                     return HandleInternalStatus(request);
+
+                case "internal/monitor":
+                    return HandleInternalMonitor(request);
 
                 case "internal/restart":
                     return HandleInternalRestart(request);
@@ -500,7 +558,7 @@ namespace ReSharperMcp
             };
         }
 
-        private JsonRpcResponse HandleToolCall(JsonRpcRequest request)
+        private JsonRpcResponse HandleToolCall(JsonRpcRequest request, RequestLogEntry entry)
         {
             var toolName = request.Params?["name"]?.ToString();
             var arguments = request.Params?["arguments"] as JObject ?? new JObject();
@@ -515,6 +573,7 @@ namespace ReSharperMcp
             // Resolve the target solution under lock, then execute outside lock
             Func<JObject, object> localHandler = null;
             int peerPort = 0;
+            string targetSolution = null;
 
             lock (_lock)
             {
@@ -582,10 +641,12 @@ namespace ReSharperMcp
                     }
 
                     target = matches[0];
+                    targetSolution = target.Name;
                 }
                 else if (all.Count == 1)
                 {
                     target = all[0];
+                    targetSolution = target.Name;
                 }
                 else
                 {
@@ -609,11 +670,17 @@ namespace ReSharperMcp
             }
 
             // Execute outside lock
+            entry.Solution = targetSolution;
             if (peerPort > 0)
+            {
+                entry.Kind = RequestKind.Forwarded;
+                entry.PeerPort = peerPort;
                 return ProxyToPeer(request, peerPort, toolName, arguments);
+            }
 
             try
             {
+                entry.Kind = RequestKind.Local;
                 var result = localHandler(arguments);
                 var text = result is string s ? s : JsonConvert.SerializeObject(result, Formatting.Indented);
                 return new JsonRpcResponse
@@ -652,6 +719,7 @@ namespace ReSharperMcp
                 var webRequest = (HttpWebRequest)WebRequest.Create(url);
                 webRequest.Method = "POST";
                 webRequest.ContentType = "application/json";
+                webRequest.Headers["Mcp-Proxy"] = "1"; // lets the peer tag this call as proxied in the monitor
                 webRequest.Timeout = 130000; // slightly more than tool timeout
 
                 var bytes = Encoding.UTF8.GetBytes(json);
@@ -815,8 +883,60 @@ namespace ReSharperMcp
 
         private JsonRpcResponse HandleInternalStatus(JsonRpcRequest request)
         {
-            var solutions = new JArray();
+            return new JsonRpcResponse
+            {
+                Id = request.Id,
+                Result = new JObject
+                {
+                    ["port"] = Port,
+                    ["role"] = IsPrimary ? "primary" : "peer",
+                    ["solutions"] = BuildSolutionsArray()
+                }
+            };
+        }
 
+        /// <summary>
+        /// Monitor endpoint: current role/port, cumulative request counts, and a page of the
+        /// request-log ring buffer. <c>after</c> returns only entries with index &gt; after (incremental
+        /// polling and SSE replay); <c>limit</c> is clamped to the buffer capacity.
+        /// </summary>
+        private JsonRpcResponse HandleInternalMonitor(JsonRpcRequest request)
+        {
+            var after = request.Params?["after"]?.Value<long>() ?? 0;
+            var limit = Math.Min(request.Params?["limit"]?.Value<int>() ?? 200, RequestLogBuffer.Capacity);
+
+            var logs = new JArray();
+            foreach (var e in _requestLogs.Query(after, limit))
+                logs.Add(e.ToJObject());
+
+            _requestLogs.GetStats(out var counts, out var errors, out var nextIndex);
+
+            return new JsonRpcResponse
+            {
+                Id = request.Id,
+                Result = new JObject
+                {
+                    ["port"] = Port,
+                    ["role"] = IsPrimary ? "primary" : "peer",
+                    ["online"] = true,
+                    ["serverTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ["nextIndex"] = nextIndex,
+                    ["counts"] = new JObject
+                    {
+                        ["local"] = counts[(int)RequestKind.Local],
+                        ["forwarded"] = counts[(int)RequestKind.Forwarded],
+                        ["other"] = counts[(int)RequestKind.Other],
+                        ["errors"] = errors
+                    },
+                    ["solutions"] = BuildSolutionsArray(),
+                    ["logs"] = logs
+                }
+            };
+        }
+
+        private JArray BuildSolutionsArray()
+        {
+            var solutions = new JArray();
             lock (_lock)
             {
                 foreach (var s in _solutions.Values)
@@ -837,17 +957,7 @@ namespace ReSharperMcp
                     });
                 }
             }
-
-            return new JsonRpcResponse
-            {
-                Id = request.Id,
-                Result = new JObject
-                {
-                    ["port"] = Port,
-                    ["role"] = IsPrimary ? "primary" : "peer",
-                    ["solutions"] = solutions
-                }
-            };
+            return solutions;
         }
 
         private JsonRpcResponse HandleInternalRestart(JsonRpcRequest request)

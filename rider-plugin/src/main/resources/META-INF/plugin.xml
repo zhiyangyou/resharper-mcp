@@ -183,5 +183,11 @@
     <statusBarWidgetFactory
         id="ReSharperMcp.StatusBar"
         implementation="com.jlight.resharpermcp.McpStatusBarWidgetFactory"/>
+    <toolWindow
+        id="ReSharperMcp.Monitor"
+        anchor="right"
+        secondary="false"
+        icon="AllIcons.General.Console"
+        factoryClass="com.jlight.resharpermcp.McpToolWindowFactory"/>
   </extensions>
 </idea-plugin>

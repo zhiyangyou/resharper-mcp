@@ -24,6 +24,10 @@ namespace ReSharperMcp
         private readonly int _primaryPort;
         private bool _isPrimary;
 
+        // Owned at process level so log history survives promotion (a peer that becomes primary
+        // constructs a fresh McpHttpServer but must keep the same request-log buffer).
+        private readonly RequestLogBuffer _requestLogs = new RequestLogBuffer();
+
         public int Port => _server?.Port ?? 0;
 
         public McpShellComponent(Lifetime lifetime, ILogger logger)
@@ -36,13 +40,14 @@ namespace ReSharperMcp
             for (var attempt = 0; attempt < MaxPortAttempts; attempt++)
             {
                 var tryPort = basePort + attempt;
-                var tryServer = new McpHttpServer(tryPort, logger);
+                var tryServer = new McpHttpServer(tryPort, logger, _requestLogs);
                 try
                 {
                     tryServer.Start();
                     _server = tryServer;
                     _isPrimary = (tryPort == basePort);
                     _server.IsPrimary = _isPrimary;
+                    WritePortSidecar(tryPort);
 
                     if (_isPrimary)
                         _logger.Info($"ReSharper MCP primary server started on port {tryPort}");
@@ -96,8 +101,44 @@ namespace ReSharperMcp
 
         public void Dispose()
         {
+            DeletePortSidecar();
             _server?.Stop();
             _logger.Info("ReSharper MCP server stopped");
+        }
+
+        /// <summary>
+        /// Writes the actual bound port to a PID-keyed temp file so the JVM frontend can discover
+        /// this process's backend port (the peer's port is only known after bind attempts, and
+        /// promotion changes it). Frontend reads Path.GetTempPath()/resharper-mcp-port-&lt;pid&gt;.txt.
+        /// </summary>
+        private static string PortSidecarPath()
+        {
+            var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+            return Path.Combine(Path.GetTempPath(), $"resharper-mcp-port-{pid}.txt");
+        }
+
+        private void WritePortSidecar(int port)
+        {
+            try
+            {
+                File.WriteAllText(PortSidecarPath(), port.ToString());
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn($"Failed to write MCP port sidecar: {ex.Message}");
+            }
+        }
+
+        private void DeletePortSidecar()
+        {
+            try
+            {
+                File.Delete(PortSidecarPath());
+            }
+            catch (Exception)
+            {
+                // Best effort — nothing to clean if the file is already gone
+            }
         }
 
         private void NotifyPrimary(string method, string solutionName, string solutionPath, List<ToolDefinition> tools)
@@ -225,7 +266,7 @@ namespace ReSharperMcp
 
                 try
                 {
-                    var newServer = new McpHttpServer(_primaryPort, _logger);
+                    var newServer = new McpHttpServer(_primaryPort, _logger, _requestLogs);
                     newServer.Start();
                     newServer.IsPrimary = true;
 
@@ -235,6 +276,7 @@ namespace ReSharperMcp
 
                     _server = newServer;
                     _isPrimary = true;
+                    WritePortSidecar(_primaryPort);
 
                     oldServer.Stop();
 

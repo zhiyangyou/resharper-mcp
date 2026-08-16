@@ -8,6 +8,6 @@ class McpStatusBarWidgetFactory : StatusBarWidgetFactory {
     override fun getId(): String = "ReSharperMcp.StatusBar"
     override fun getDisplayName(): String = "ReSharper MCP Server"
     override fun isAvailable(project: Project): Boolean = true
-    override fun createWidget(project: Project): StatusBarWidget = McpStatusBarWidget()
+    override fun createWidget(project: Project): StatusBarWidget = McpStatusBarWidget(project)
     override fun isEnabledByDefault(): Boolean = true
 }
