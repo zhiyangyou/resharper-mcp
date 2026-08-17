@@ -1,6 +1,6 @@
 # ReSharper MCP Server
 
-**Version:** `0.10.0`
+**Version:** `0.11.0`
 
 
 An MCP (Model Context Protocol) server that runs inside the ReSharper/Rider backend process, exposing code intelligence features to AI assistants via HTTP.
@@ -20,7 +20,7 @@ Supports C#, F#, VB, and any language with a ReSharper PSI implementation.
 | `get_solution_structure` | List projects, target frameworks, and project references |
 | `browse_namespace` | Browse namespace hierarchy: child namespaces and types |
 | `list_symbols_in_file` | List all declarations in a file |
-| `list_solutions` | List all open solutions across Rider instances |
+| `list_solutions` | List all open solutions across Rider instances, each with a stable `id` (full .sln path) |
 | `fix_usings` | Fix missing using directives in C# files |
 | `format_file` | Format, clean up, or apply code style to a file |
 | `flow` | Describe control flow of a method or type: execution steps, branches, loops, error paths, inlined call targets |

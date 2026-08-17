@@ -76,16 +76,18 @@ Rider 每个解决方案开一个独立 OS 进程，多个解决方案 = 多个�
 
 ```
 tools/call 请求
-  ├─ 工具名 == list_solutions  → 直接返回所有已打开的解决方案
+  ├─ 工具名 == list_solutions  → 直接返回所有已打开的解决方案（含稳定 id，即完整 .sln 路径）
   ├─ 传入 solutionName：
-  │    1. 精确名称 / 完整路径匹配
+  │    1. 精确名称 / 完整路径匹配（id 即完整路径，必命中且唯一）
   │    2. 唯一路径段匹配（如 "tps-project" 匹配 ".../tps-project/..."，不匹配 ".../tps-project-dyn/..."）
-  │    3. 仍歧义 → 返回候选列表 + uniquePathSegment 提示
+  │    3. 仍歧义 → 返回候选列表，提示复制 list_solutions 中的 id（完整路径）作为 solutionName
   ├─ 未传 solutionName：
   │    仅一个解决方案 → 自动路由（向后兼容）
   │    多个 → 报错并要求指定 solutionName
-  └─ 目标为本地 → 本进程执行；目标为 Peer → HTTP 代理转发
+  └─ 目标为本地 → 本进程执行；目标为 Peer → HTTP 代理转发（转发请求携带已解析的 id，Peer 精确命中本地解，不会再次转发）
 ```
+
+> **同名解决方案（同名不同路径）**：`solutionName` 只是显示名（`.sln` 文件名去扩展名），同名解会重名。内部注册以**完整路径**为 key，同名解可共存。客户端应优先从 `list_solutions` 复制目标解的 `id`（完整路径）作为 `solutionName` 精确定位；传 `solutionName: "MyProject"` 这类同名文件名会命中多个并返回歧义错误。
 
 ### 3.4 关键源码：端口绑定与主/从判定（`McpShellComponent.cs`）
 
@@ -270,6 +272,10 @@ private void HandleRequest(HttpListenerContext context)
 private JsonRpcResponse ProxyToPeer(JsonRpcRequest originalRequest, int peerPort, string toolName, JObject arguments)
 {
     // 构造 tools/call 请求 → POST http://127.0.0.1:{peerPort}/
+    // 转发前注入 arguments["solutionName"] = 已解析的完整路径（id）：
+    //   Peer 端第 1 层精确路径匹配必然命中自己（注册 key 与转发串逐字节同源），本地多解也能正确定位；
+    //   Peer 收到后先 Remove 再交给工具处理器，id 不会泄漏到工具；
+    //   命中即 IsLocal，结构上不可能再次转发（无递归）。
     // 超时 130s（略大于工具 120s 超时）
     // 返回原样透传的 JsonRpcResponse
 }

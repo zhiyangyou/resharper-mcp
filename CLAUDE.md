@@ -38,16 +38,17 @@ The plugin uses a **primary/peer** model:
 
 - **Primary** — the first Rider instance binds the base port (23741). It acts as the single MCP endpoint for all clients.
 - **Peer** — subsequent instances bind the next available port (23742, 23743, ...) and register themselves with the primary via `internal/register` / `internal/deregister` JSON-RPC methods.
-- The primary proxies `tools/call` requests for peer solutions by forwarding HTTP requests to the peer's port. If a proxy fails (peer crashed), the stale registration is automatically removed.
+- The primary proxies `tools/call` requests for peer solutions by forwarding HTTP requests to the peer's port, carrying the resolved solution id so the peer routes deterministically (even with multiple local solutions). If a proxy fails (peer crashed), the stale registration is automatically removed.
+- Peers re-register their local solutions with the primary on every watchdog tick (idempotent), so routing self-heals after a primary restart or after a peer takes over as primary.
 
 Component breakdown:
 
-- `McpShellComponent.cs` — `[ShellComponent]` (process-level singleton). Tries to bind the base port; on failure, increments and becomes a peer. Owns the `McpHttpServer`. Handles peer registration notifications.
+- `McpShellComponent.cs` — `[ShellComponent]` (process-level singleton). Tries to bind the base port; on failure, increments and becomes a peer. Owns the `McpHttpServer`. Handles peer registration notifications. Tracks local solutions (`_localSolutions`) for periodic re-registration.
 - `McpServerComponent.cs` — `[SolutionComponent]` (per-solution). Registers/unregisters tools with the shell component on solution open/close. Handles PSI thread dispatch.
 - When only one solution is open (across all Rider instances), all tool calls route to it automatically (backwards-compatible).
 - When multiple solutions are open, callers must specify `solutionName` in tool arguments.
-- The `list_solutions` meta-tool returns all currently open solutions (local + peers).
-- `solutionName` matches case-insensitively against the solution filename (without `.sln`) or the full path.
+- The `list_solutions` meta-tool returns all currently open solutions (local + peers), each with a stable `id` (the full `.sln` path) — prefer passing the `id` as `solutionName` to target solutions with duplicate names precisely.
+- `solutionName` matches case-insensitively against the solution filename (without `.sln`), the full path (the id), or a unique path segment.
 
 ### ReSharper integration
 
@@ -343,6 +344,10 @@ curl -s http://127.0.0.1:23741/ -X POST -H "Content-Type: application/json" \
 # Target a specific solution (when multiple are open)
 curl -s http://127.0.0.1:23741/ -X POST -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search_symbol","arguments":{"query":"Player","maxResults":10,"solutionName":"MyProject"}}}'
+
+# Target by stable id (full path from list_solutions) — unambiguous for duplicate names
+curl -s http://127.0.0.1:23741/ -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"search_symbol","arguments":{"query":"Player","maxResults":10,"solutionName":"/path/to/MyProject.sln"}}}'
 ```
 
 ## Next Steps / Ideas

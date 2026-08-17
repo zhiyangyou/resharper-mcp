@@ -75,6 +75,33 @@ namespace ReSharperMcp
                     var s = kvp.Value;
                     target.RegisterSolution(s.Name, s.Path, s.Tools, s.ToolHandlers);
                 }
+
+                // Best-effort transfer of known peers so the promoted primary can keep serving
+                // other processes' solutions immediately. Stale entries are cleaned up by the
+                // existing WebException handling in ProxyToPeer on first failed forward.
+                foreach (var kvp in _peers)
+                {
+                    var p = kvp.Value;
+                    target.MergePeer(new PeerRegistration
+                    {
+                        SolutionName = p.SolutionName,
+                        SolutionPath = p.SolutionPath,
+                        Port = p.Port,
+                        Tools = p.Tools
+                    });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Upserts a known peer registration. Called by the promoted primary when transferring
+        /// the old server's peer table (see <see cref="TransferRegistrationsTo"/>).
+        /// </summary>
+        internal void MergePeer(PeerRegistration peer)
+        {
+            lock (_lock)
+            {
+                _peers[peer.SolutionPath] = peer;
             }
         }
 
@@ -569,9 +596,11 @@ namespace ReSharperMcp
             {
                 type = "string",
                 description =
-                    "Target solution name (e.g. 'MyProject'), a unique path segment (e.g. 'my-repo'), or full path. " +
+                    "Solution selector. Prefer passing the stable id (full .sln path) returned by list_solutions " +
+                    "(e.g. '/a/MyProject.sln') to target a solution precisely and unambiguously. " +
+                    "Also accepts the solution name (e.g. 'MyProject'), a unique path segment (e.g. 'my-repo'), or a full path. " +
                     "Optional when only one solution is open. " +
-                    "Required when multiple solutions are open — use list_solutions to see available names and uniquePathSegment hints."
+                    "Required when multiple solutions are open — call list_solutions first and copy the id of the target solution."
             });
             schema["properties"] = props;
 
@@ -599,6 +628,7 @@ namespace ReSharperMcp
             Func<JObject, object> localHandler = null;
             int peerPort = 0;
             string targetSolution = null;
+            string targetPath = null;
 
             lock (_lock)
             {
@@ -618,7 +648,9 @@ namespace ReSharperMcp
 
                 if (solutionName != null)
                 {
-                    // 1. Try exact name or path match
+                    // 1. Try exact name or path match. This layer is also the stable-id lookup:
+                    //    a solution id IS its full .sln path, and solution names never contain a path
+                    //    separator, so an id always matches uniquely via Path.Equals.
                     var matches = all
                         .Where(s => s.Name.Equals(solutionName, StringComparison.OrdinalIgnoreCase)
                                     || s.Path.Equals(solutionName, StringComparison.OrdinalIgnoreCase))
@@ -658,20 +690,23 @@ namespace ReSharperMcp
                             matches.Select(s =>
                             {
                                 var hint = disambiguators.TryGetValue(s.Path, out var h) ? h : null;
-                                var hintText = hint != null ? $" — use solutionName: \"{hint}\"" : "";
-                                return $"  - {s.Name} ({s.Path}){hintText}";
+                                var hintText = hint != null ? $" (or unique path segment: \"{hint}\")" : "";
+                                return $"  - {s.Name} — solutionName: \"{s.Path}\"{hintText}";
                             }));
                         return ToolError(request,
-                            $"Ambiguous solution name '{solutionName}'. Matches:\n{available}");
+                            $"Ambiguous solution name '{solutionName}'. " +
+                            "Copy the id (full path) from list_solutions and pass it as solutionName:\n" + available);
                     }
 
                     target = matches[0];
                     targetSolution = target.Name;
+                    targetPath = target.Path;
                 }
                 else if (all.Count == 1)
                 {
                     target = all[0];
                     targetSolution = target.Name;
+                    targetPath = target.Path;
                 }
                 else
                 {
@@ -700,7 +735,7 @@ namespace ReSharperMcp
             {
                 entry.Kind = RequestKind.Forwarded;
                 entry.PeerPort = peerPort;
-                return ProxyToPeer(request, peerPort, toolName, arguments);
+                return ProxyToPeer(request, peerPort, toolName, arguments, targetPath);
             }
 
             try
@@ -723,10 +758,16 @@ namespace ReSharperMcp
             }
         }
 
-        private JsonRpcResponse ProxyToPeer(JsonRpcRequest originalRequest, int peerPort, string toolName, JObject arguments)
+        private JsonRpcResponse ProxyToPeer(JsonRpcRequest originalRequest, int peerPort, string toolName, JObject arguments, string solutionPath)
         {
             try
             {
+                // Forward the resolved solution id (full path) so the peer can route deterministically.
+                // The peer's own registration key is byte-for-byte the same string (peer → internal/register → primary),
+                // so its exact-path match in HandleToolCall resolves to itself (IsLocal) — never re-proxied. The peer
+                // strips solutionName again before dispatching to the tool handler, so it never leaks to the tool.
+                arguments["solutionName"] = solutionPath;
+
                 var peerRequest = new JsonRpcRequest
                 {
                     Id = originalRequest.Id,
@@ -800,6 +841,7 @@ namespace ReSharperMcp
                 {
                     var obj = new JObject
                     {
+                        ["id"] = s.Path, // stable unique id — the full .sln path (also the registration key)
                         ["name"] = s.Name,
                         ["path"] = s.Path,
                         ["toolCount"] = s.Tools.Count
@@ -813,6 +855,7 @@ namespace ReSharperMcp
                 {
                     var obj = new JObject
                     {
+                        ["id"] = p.SolutionPath,
                         ["name"] = p.SolutionName,
                         ["path"] = p.SolutionPath,
                         ["toolCount"] = p.Tools.Count
@@ -866,6 +909,19 @@ namespace ReSharperMcp
 
                 lock (_lock)
                 {
+                    // Guard against self-registration: a peer must never register a path that this
+                    // process holds locally — that would put the same solution in both _solutions
+                    // and _peers and make its own exact-path match ambiguous.
+                    if (_solutions.ContainsKey(path))
+                    {
+                        _logger.Verbose($"Ignoring peer registration for locally-held solution at '{path}'");
+                        return new JsonRpcResponse
+                        {
+                            Id = request.Id,
+                            Result = new JObject { ["ok"] = true }
+                        };
+                    }
+
                     _peers[path] = new PeerRegistration
                     {
                         SolutionName = name,
@@ -875,7 +931,7 @@ namespace ReSharperMcp
                     };
                 }
 
-                _logger.Info($"Registered peer solution '{name}' on port {port}");
+                _logger.Verbose($"Registered peer solution '{name}' on port {port}");
             }
 
             return new JsonRpcResponse
@@ -976,6 +1032,7 @@ namespace ReSharperMcp
                 {
                     solutions.Add(new JObject
                     {
+                        ["id"] = s.Path,
                         ["name"] = s.Name,
                         ["path"] = s.Path
                     });
@@ -987,6 +1044,7 @@ namespace ReSharperMcp
                     {
                         solutions.Add(new JObject
                         {
+                            ["id"] = p.SolutionPath,
                             ["name"] = p.SolutionName,
                             ["path"] = p.SolutionPath
                         });

@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -22,12 +24,19 @@ namespace ReSharperMcp
         private McpHttpServer _server;
         private readonly ILogger _logger;
         private readonly int _primaryPort;
-        private bool _isPrimary;
+        private volatile bool _isPrimary;
 
         // Owned at process level so log history survives promotion (a peer that becomes primary
         // constructs a fresh McpHttpServer but must keep the same request-log buffer).
         private readonly RequestLogBuffer _requestLogs = new RequestLogBuffer();
         private readonly ClientSessionTracker _clientSessions = new ClientSessionTracker();
+
+        // Local solutions currently open in this process, used by the peer watchdog to re-register
+        // with the primary. Keyed by solution path (same key as the server's registration tables).
+        // Concurrent because RegisterSolution/UnregisterSolution run on R# threads while the watchdog
+        // re-registration runs on a Timer thread.
+        private readonly ConcurrentDictionary<string, LocalSolution> _localSolutions =
+            new ConcurrentDictionary<string, LocalSolution>();
 
         public int Port => _server?.Port ?? 0;
 
@@ -84,6 +93,14 @@ namespace ReSharperMcp
             _server.RegisterSolution(solutionName, solutionPath, tools, handlers);
             _logger.Info($"Registered solution '{solutionName}' locally on port {_server.Port}");
 
+            // Track locally for periodic re-registration with the primary (peer watchdog)
+            _localSolutions[solutionPath] = new LocalSolution
+            {
+                Name = solutionName,
+                Path = solutionPath,
+                Tools = tools
+            };
+
             // If we're a peer, also notify the primary server
             if (!_isPrimary)
                 NotifyPrimary("internal/register", solutionName, solutionPath, tools);
@@ -94,6 +111,7 @@ namespace ReSharperMcp
             if (_server == null) return;
 
             _server.UnregisterSolution(solutionPath);
+            _localSolutions.TryRemove(solutionPath, out _);
 
             // If we're a peer, also notify the primary server
             if (!_isPrimary)
@@ -171,11 +189,12 @@ namespace ReSharperMcp
                 };
 
                 SendToPrimary(request);
-                _logger.Info($"Registered solution '{solutionName}' with primary server on port {_primaryPort}");
+                _logger.Verbose($"Registered solution '{solutionName}' with primary server on port {_primaryPort}");
             }
             catch (Exception ex)
             {
-                _logger.Warn($"Failed to register with primary MCP server: {ex.Message}");
+                // Expected during primary downtime (peer watchdog re-registers every 30s) — keep quiet.
+                _logger.Verbose($"Failed to register with primary MCP server: {ex.Message}");
             }
         }
 
@@ -229,9 +248,12 @@ namespace ReSharperMcp
         {
             if (_server == null) return;
 
-            // For peers: check if the primary is still alive; if not, try to take over
+            // For peers: re-register local solutions with the primary (idempotent; self-heals a
+            // restarted/regenerated primary and a promoted primary's peer table), then check whether
+            // the primary is still alive; if not, try to take over
             if (!_isPrimary)
             {
+                ReRegisterWithPrimary();
                 TryPromoteToPrimary();
                 return;
             }
@@ -245,6 +267,29 @@ namespace ReSharperMcp
             {
                 _logger.Warn($"MCP server health check failed: {ex.Message} — triggering restart");
                 _server.Restart();
+            }
+        }
+
+        /// <summary>
+        /// Idempotently re-registers all local solutions with the primary. Called every watchdog
+        /// tick by peers so the primary's peer table self-heals after a primary restart, a primary
+        /// takeover (promotion), or a missed deregister. Snapshot under the dictionary lock, send
+        /// over the network outside it (SendToPrimary may block up to 5s per solution).
+        /// </summary>
+        private void ReRegisterWithPrimary()
+        {
+            // A previous tick may have promoted us meanwhile (timer callbacks can re-enter when a
+            // tick runs longer than the 30s period); if so we are the primary now and must not POST
+            // to ourselves — that would register ourselves in our own peer table.
+            if (_isPrimary) return;
+
+            var snapshot = _localSolutions.Values.ToList();
+            foreach (var s in snapshot)
+            {
+                // The solution may have been closed between the snapshot and now — skip it so an
+                // in-flight register can't re-create a stale peer entry after its deregister.
+                if (!_localSolutions.ContainsKey(s.Path)) continue;
+                NotifyPrimary("internal/register", s.Name, s.Path, s.Tools);
             }
         }
 
@@ -316,5 +361,12 @@ namespace ReSharperMcp
                 return port;
             return DefaultPort;
         }
+    }
+
+    internal class LocalSolution
+    {
+        public string Name { get; set; }
+        public string Path { get; set; }
+        public List<ToolDefinition> Tools { get; set; }
     }
 }

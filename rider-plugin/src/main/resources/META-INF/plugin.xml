@@ -1,7 +1,7 @@
 <idea-plugin require-restart="true">
   <id>com.j-light.resharper-mcp</id>
   <name>MCP Server for Code Intelligence</name>
-  <version>0.10.0</version>
+  <version>0.11.0</version>
   <vendor email="j.light.developer@gmail.com" url="https://plugins.jetbrains.com/vendor/j-light">Joshua Light</vendor>
   <idea-version since-build="253" />
   <depends>com.intellij.modules.rider</depends>
@@ -74,6 +74,12 @@
     <p>Set the <code>RESHARPER_MCP_PORT</code> environment variable before launching Rider to use a different port.</p>
   ]]></getting-started>
   <change-notes><![CDATA[
+    <p><b>0.11.0</b></p>
+    <ul>
+      <li>Stable solution id: <code>list_solutions</code> now returns an <code>id</code> (the full .sln path) for every open solution — pass it as <code>solutionName</code> to target solutions with duplicate names precisely and unambiguously</li>
+      <li>Robust same-name routing: forwarding a tool call to a peer now carries the resolved solution id, so peers with multiple local solutions resolve correctly instead of failing</li>
+      <li>Primary/peer self-healing: peers re-register their solutions with the primary on a watchdog cadence, so routing recovers automatically after a primary restart or takeover</li>
+    </ul>
     <p><b>0.10.0</b></p>
     <ul>
       <li>New <code>apply_suggestions</code> tool: apply inspection quick-fixes across a whole file by inspection id — e.g. convert every explicit constructor into a primary constructor. Position-free and file-wide (complements <code>apply_quick_fix</code>), driving ReSharper's "Fix all in file" engine headlessly. Filter with <code>inspectionIds</code> or pass <code>all</code>; preview with <code>dryRun</code>; batch via <code>filePaths</code></li>

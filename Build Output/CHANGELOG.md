@@ -1,5 +1,11 @@
 # ChangeLog
 
+## [0.11.0] - 2026-08-17
+
+- Stable solution id: `list_solutions` now returns an `id` (the full .sln path) for every open solution — pass it as `solutionName` to target solutions with duplicate names precisely and unambiguously.
+- Robust same-name routing: forwarding a tool call to a peer now carries the resolved solution id, so peers with multiple local solutions resolve correctly instead of failing.
+- Primary/peer self-healing: peers re-register their solutions with the primary on a watchdog cadence, so routing recovers automatically after a primary restart or takeover.
+
 ## [0.10.0] - 2026-08-17
 
 - Added the `apply_suggestions` tool for applying inspection quick-fixes across a whole file.
