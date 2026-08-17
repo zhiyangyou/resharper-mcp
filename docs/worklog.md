@@ -52,3 +52,7 @@
 > **Java 环境约束**：构建 Rider 插件时，优先使用 `JAVA_HOME` 指向的 JDK 21；如果找不到可用的 JDK 21，则继续查找 Android Studio 下的 JDK 21。
 >
 > **构建产物约束**：执行面向 Rider 插件的构建时，必须生成最终插件 ZIP，并放置在仓库根目录的 `Build Output` 文件夹下；该文件夹及其中的最终产物必须随 Git Commit 一起提交。
+
+### 版本交付文档约束（长期约束）
+
+> `Build Output` 中必须同时包含 `README.md` 和 `CHANGELOG.md`。每当产生新版本时，必须同步更新版本交付说明与变更记录；构建流程会根据 `plugin.xml` 中的版本号生成带版本号的 `README.md`，并复制根目录 `CHANGELOG.md`，且要求 ChangeLog 已包含当前版本条目。

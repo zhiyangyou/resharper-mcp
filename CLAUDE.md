@@ -266,6 +266,8 @@ src/ReSharperMcp/
 The build scripts use JDK 21 from `JAVA_HOME` when available. If it is not a usable JDK 21,
 they look for a JDK 21 bundled with Android Studio. The distributable Rider plugin artifact is
 always written to `Build Output/ReSharperMcp.zip` and is committed with the repository changes.
+Each build also writes a versioned `Build Output/README.md` and copies `CHANGELOG.md` to
+`Build Output/CHANGELOG.md`. A build fails if the current plugin version has no ChangeLog entry.
 
 Override port: `RESHARPER_MCP_PORT=9999`
 

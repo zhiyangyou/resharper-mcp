@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STAGING_DIR="$SCRIPT_DIR/.build-staging"
 OUTPUT_DIR="$SCRIPT_DIR/Build Output"
 ZIP_FILE="$OUTPUT_DIR/$PLUGIN_NAME.zip"
+PLUGIN_XML="$SCRIPT_DIR/rider-plugin/src/main/resources/META-INF/plugin.xml"
+CHANGELOG_SOURCE="$SCRIPT_DIR/CHANGELOG.md"
 
 source "$SCRIPT_DIR/scripts/resolve-java-home.sh"
 
@@ -14,6 +16,17 @@ if ! JAVA_HOME="$(resolve_java_home)"; then
     exit 1
 fi
 export JAVA_HOME
+
+PLUGIN_VERSION="$(sed -nE 's/.*<version>([^<]+)<\/version>.*/\1/p' "$PLUGIN_XML" | head -n 1)"
+if [ -z "$PLUGIN_VERSION" ]; then
+    echo "Error: Could not determine plugin version from $PLUGIN_XML."
+    exit 1
+fi
+
+if [ ! -f "$CHANGELOG_SOURCE" ] || ! grep -Fq "## [$PLUGIN_VERSION]" "$CHANGELOG_SOURCE"; then
+    echo "Error: $CHANGELOG_SOURCE must contain a section for version $PLUGIN_VERSION."
+    exit 1
+fi
 
 if command -v dotnet >/dev/null 2>&1; then
     DOTNET_COMMAND="dotnet"
@@ -64,6 +77,14 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/$PLUGIN_NAME/lib"
 mkdir -p "$STAGING_DIR/$PLUGIN_NAME/dotnet"
 mkdir -p "$OUTPUT_DIR"
+
+{
+    printf '# ReSharper MCP Server\n\n'
+    printf '**Version:** `%s`\n\n' "$PLUGIN_VERSION"
+    sed '1{/^# ReSharper MCP Server$/d;}' "$SCRIPT_DIR/README.md"
+} > "$OUTPUT_DIR/README.md"
+cp "$CHANGELOG_SOURCE" "$OUTPUT_DIR/CHANGELOG.md"
+
 cp "$PLUGIN_JAR" "$STAGING_DIR/$PLUGIN_NAME/lib/"
 cp "$SCRIPT_DIR/src/ReSharperMcp/bin/Release/net472/$PLUGIN_NAME.dll" "$STAGING_DIR/$PLUGIN_NAME/dotnet/"
 
