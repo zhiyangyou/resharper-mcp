@@ -259,8 +259,13 @@ src/ReSharperMcp/
 
 ```bash
 ./install-rider.sh              # builds Release, creates JAR, copies to Rider plugin dir
+./build-plugin.sh                # builds the distributable ZIP into Build Output/ReSharperMcp.zip
 # then restart Rider
 ```
+
+The build scripts use JDK 21 from `JAVA_HOME` when available. If it is not a usable JDK 21,
+they look for a JDK 21 bundled with Android Studio. The distributable Rider plugin artifact is
+always written to `Build Output/ReSharperMcp.zip` and is committed with the repository changes.
 
 Override port: `RESHARPER_MCP_PORT=9999`
 

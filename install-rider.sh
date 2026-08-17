@@ -3,6 +3,9 @@ set -euo pipefail
 
 PLUGIN_NAME="ReSharperMcp"
 RIDER_VERSION="${1:-}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+source "$SCRIPT_DIR/scripts/resolve-java-home.sh"
 
 # Auto-detect Rider version if not specified
 if [ -z "$RIDER_VERSION" ]; then
@@ -26,31 +29,36 @@ else
 fi
 
 PLUGIN_DIR="$RIDER_DIR/plugins/$PLUGIN_NAME"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Ensure JAVA_HOME is set for Gradle. If not already set, try to find a JDK that Gradle
-# supports (Gradle 8.13 needs Java <= 24, so Rider's JBR 25 is NOT usable).
-if [ -z "${JAVA_HOME:-}" ]; then
-    # macOS: Rider.app bundles a JBR — but it may be too new for Gradle, so prefer Homebrew JDK 21/17
-    if [ -d "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" ]; then
-        export JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
-    elif [ -d "/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" ]; then
-        export JAVA_HOME="/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
-    elif [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
-        export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
-    # Fall back to Rider's bundled JBR (user location first, then /Applications)
-    elif [ -d "$HOME/Applications/Rider.app/Contents/jbr/Contents/Home" ]; then
-        export JAVA_HOME="$HOME/Applications/Rider.app/Contents/jbr/Contents/Home"
-    elif [ -d "/Applications/Rider.app/Contents/jbr/Contents/Home" ]; then
-        export JAVA_HOME="/Applications/Rider.app/Contents/jbr/Contents/Home"
+if ! JAVA_HOME="$(resolve_java_home)"; then
+    echo "Error: JDK 21 not found in JAVA_HOME or Android Studio."
+    exit 1
+fi
+export JAVA_HOME
+
+if command -v dotnet >/dev/null 2>&1; then
+    DOTNET_COMMAND="dotnet"
+elif command -v dotnet.exe >/dev/null 2>&1; then
+    DOTNET_COMMAND="dotnet.exe"
+else
+    echo "Error: dotnet or dotnet.exe was not found."
+    exit 1
+fi
+
+DOTNET_PROJECT="$SCRIPT_DIR/src/ReSharperMcp/ReSharperMcp.csproj"
+if [ "$DOTNET_COMMAND" = "dotnet.exe" ]; then
+    if command -v wslpath >/dev/null 2>&1; then
+        DOTNET_PROJECT="$(wslpath -w "$DOTNET_PROJECT")"
+    elif command -v cygpath >/dev/null 2>&1; then
+        DOTNET_PROJECT="$(cygpath -w "$DOTNET_PROJECT")"
     fi
 fi
 
 echo "Building backend..."
-dotnet build "$SCRIPT_DIR/src/ReSharperMcp/ReSharperMcp.csproj" -c Release -v quiet
+"$DOTNET_COMMAND" build "$DOTNET_PROJECT" -c Release -v quiet
 
 echo "Building frontend..."
-(cd "$SCRIPT_DIR/rider-plugin" && ./gradlew jar --quiet)
+run_gradle_jar "$SCRIPT_DIR/rider-plugin"
 
 echo "Installing to: $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR/dotnet"
