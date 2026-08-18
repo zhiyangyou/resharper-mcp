@@ -15,6 +15,7 @@ TestResults/
 .env
 rider-plugin/.gradle/
 rider-plugin/.intellijPlatform/
+rider-plugin/.kotlin/
 rider-plugin/build/
 !rider-plugin/gradle/wrapper/gradle-wrapper.jar
 JetBrains.*.resources

@@ -13,6 +13,7 @@ dependencies {
         rider("2025.3")
         instrumentationTools()
     }
+    testImplementation(kotlin("test"))
 }
 
 kotlin {
@@ -23,6 +24,9 @@ kotlin {
 }
 
 tasks {
+    test {
+        useJUnitPlatform()
+    }
     buildSearchableOptions { enabled = false }
     patchPluginXml { enabled = false }
     verifyPluginProjectConfiguration { enabled = false }

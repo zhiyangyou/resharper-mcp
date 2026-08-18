@@ -1,5 +1,11 @@
 # ChangeLog
 
+## [0.11.1] - 2026-08-18
+
+- Fixed deterministic routing for same-name solutions by using normalized full-path IDs across local and peer registries.
+- Preserved solution IDs through primary-to-peer forwarding, peer re-resolution, request logs, monitoring, and UI labels.
+- Added owner-safe peer deregistration, complete stale-port cleanup, C#/Kotlin regression tests, and Windows-native build/deploy scripts.
+
 ## [0.11.0] - 2026-08-17
 
 - Stable solution id: `list_solutions` now returns an `id` (the full .sln path) for every open solution — pass it as `solutionName` to target solutions with duplicate names precisely and unambiguously.

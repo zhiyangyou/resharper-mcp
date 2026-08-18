@@ -33,11 +33,7 @@ class McpLogsTableModel(private val filter: (RequestLogEntry) -> Boolean) : Abst
             0 -> formatTime(entry.ts)
             1 -> entry.tool ?: entry.method
             2 -> "${entry.durationMs} ms"
-            3 -> when {
-                entry.kind == LogKind.FORWARDED -> "peer:${entry.peerPort}"
-                entry.solution != null -> entry.solution
-                else -> "—"
-            }
+            3 -> targetLabel(entry)
             4 -> when {
                 entry.kind == LogKind.FORWARDED -> "route"
                 entry.viaPrimary -> "viaPrimary"
@@ -52,5 +48,19 @@ class McpLogsTableModel(private val filter: (RequestLogEntry) -> Boolean) : Abst
 
     private fun formatTime(ts: Long): String {
         return SimpleDateFormat("HH:mm:ss.SSS").format(Date(ts))
+    }
+
+    private fun targetLabel(entry: RequestLogEntry): String {
+        val name = entry.solution?.takeIf { it.isNotBlank() }
+        val id = entry.solutionId?.takeIf { it.isNotBlank() } ?: name
+        val target = when {
+            name != null && id != null && !name.equals(id, ignoreCase = true) -> "$name — $id"
+            id != null -> id
+            else -> "—"
+        }
+        return if (entry.kind == LogKind.FORWARDED && entry.peerPort > 0)
+            "$target (peer:${entry.peerPort})"
+        else
+            target
     }
 }

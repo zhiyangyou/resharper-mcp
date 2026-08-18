@@ -36,7 +36,7 @@ namespace ReSharperMcp
         // Concurrent because RegisterSolution/UnregisterSolution run on R# threads while the watchdog
         // re-registration runs on a Timer thread.
         private readonly ConcurrentDictionary<string, LocalSolution> _localSolutions =
-            new ConcurrentDictionary<string, LocalSolution>();
+            new ConcurrentDictionary<string, LocalSolution>(SolutionPathIdentity.Comparer);
 
         public int Port => _server?.Port ?? 0;
 
@@ -89,33 +89,45 @@ namespace ReSharperMcp
         {
             if (_server == null) return;
 
+            var normalizedPath = SolutionPathIdentity.Normalize(solutionPath);
+            if (string.IsNullOrWhiteSpace(solutionName) || normalizedPath == null || tools == null || handlers == null)
+            {
+                _logger.Error(new ArgumentException("Invalid solution registration"),
+                    $"Rejected solution registration '{solutionName}' at '{solutionPath}'");
+                return;
+            }
+
             // Always register locally
-            _server.RegisterSolution(solutionName, solutionPath, tools, handlers);
+            _server.RegisterSolution(solutionName, normalizedPath, tools, handlers);
             _logger.Info($"Registered solution '{solutionName}' locally on port {_server.Port}");
 
             // Track locally for periodic re-registration with the primary (peer watchdog)
-            _localSolutions[solutionPath] = new LocalSolution
+            _localSolutions[normalizedPath] = new LocalSolution
             {
                 Name = solutionName,
-                Path = solutionPath,
+                Path = normalizedPath,
                 Tools = tools
             };
 
             // If we're a peer, also notify the primary server
             if (!_isPrimary)
-                NotifyPrimary("internal/register", solutionName, solutionPath, tools);
+                NotifyPrimary("internal/register", solutionName, normalizedPath, tools);
         }
 
         public void UnregisterSolution(string solutionPath)
         {
             if (_server == null) return;
 
-            _server.UnregisterSolution(solutionPath);
-            _localSolutions.TryRemove(solutionPath, out _);
+            var normalizedPath = SolutionPathIdentity.Normalize(solutionPath);
+            if (normalizedPath == null)
+                return;
+
+            _server.UnregisterSolution(normalizedPath);
+            _localSolutions.TryRemove(normalizedPath, out _);
 
             // If we're a peer, also notify the primary server
             if (!_isPrimary)
-                NotifyPrimaryDeregister(solutionPath);
+                NotifyPrimaryDeregister(normalizedPath, _server.Port);
         }
 
         public void Dispose()
@@ -198,7 +210,7 @@ namespace ReSharperMcp
             }
         }
 
-        private void NotifyPrimaryDeregister(string solutionPath)
+        private void NotifyPrimaryDeregister(string solutionPath, int peerPort)
         {
             try
             {
@@ -208,7 +220,8 @@ namespace ReSharperMcp
                     Method = "internal/deregister",
                     Params = new JObject
                     {
-                        ["solutionPath"] = solutionPath
+                        ["solutionPath"] = solutionPath,
+                        ["port"] = peerPort
                     }
                 };
 

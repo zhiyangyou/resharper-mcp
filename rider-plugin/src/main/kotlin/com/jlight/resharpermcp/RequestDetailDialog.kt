@@ -57,7 +57,12 @@ class RequestDetailDialog(project: Project?, private val entry: RequestLogEntry)
     }
 
     private fun targetText(): String = when {
-        entry.kind == LogKind.FORWARDED -> "peer:${entry.peerPort}"
+        entry.solution != null && entry.solutionId != null &&
+            !entry.solution.equals(entry.solutionId, ignoreCase = true) ->
+            "${entry.solution} — ${entry.solutionId}" +
+                if (entry.kind == LogKind.FORWARDED && entry.peerPort > 0) " (peer:${entry.peerPort})" else ""
+        entry.solutionId != null -> entry.solutionId +
+            if (entry.kind == LogKind.FORWARDED && entry.peerPort > 0) " (peer:${entry.peerPort})" else ""
         entry.solution != null -> entry.solution
         else -> "—"
     }

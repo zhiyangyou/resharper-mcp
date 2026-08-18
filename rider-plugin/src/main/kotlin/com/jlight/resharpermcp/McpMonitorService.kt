@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
 @Service(Service.Level.PROJECT)
 class McpMonitorService(private val project: Project) : Disposable {
 
-    private val client = McpMonitorClient()
+    private val client = McpMonitorClient(project.basePath)
     private val listeners = CopyOnWriteArrayList<(MonitorState, List<RequestLogEntry>) -> Unit>()
     private var pollFuture: ScheduledFuture<*>? = null
 

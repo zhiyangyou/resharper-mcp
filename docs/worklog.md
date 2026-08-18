@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-08-17 待办登记
+
+### TODO-001：区分不同 Git 仓库中的同名 Solution
+
+- **现象**：存在两个名称相同、但分别属于不同 Git 仓库的 Solution 时，当前实现无法可靠区分它们对应的 MCP 实例。
+- **影响**：基于工程名的实例识别或请求路由可能发生冲突，无法准确定位目标 Solution。
+- **预期**：在 Solution 名称之外引入稳定且可区分不同仓库的身份信息（例如 Solution 路径及其 Git 仓库根路径），并贯穿实例登记、`list_solutions` 展示和请求路由。
+- **复现日志**：2026-08-17 14:14:16.061 调用 `search_symbol`（参数：`query = "ActivityGameCoinGrabExecutor.RegisterCommand"`，`maxResults = 20`）时，返回 `Multiple solutions are open. Specify 'solutionName' in the arguments.`。可用解决方案均显示为 `Client`，但路径不同：`D:\_workSpace\m88\idlexX\Client\Client.sln` 与 `G:\_m88_work_space\idlexX55555\Client\Client.sln`。
+- **状态**：待处理。
+
+### TODO-002：修正多 Rider 实例的状态栏状态获取
+
+- **现象**：同时打开两个 Rider 实例时，两个实例的状态栏都显示为 `Primary`，且显示相同端口（截图中为 `23741`）。
+- **影响**：状态栏展示的角色和端口与实际 MCP 实例状态不一致，无法据此判断当前实例是 Primary 还是 Peer。
+- **预期**：状态栏应从当前 Rider 实例对应的 MCP 后端获取真实的角色、实际监听端口和在线状态；多个实例应显示各自独立且正确的状态。
+- **状态**：待处理。
+
+---
+
 ## 2026-08-16 迭代：Monitor 日志过滤 + 部署流程封装
 
 ### 需求

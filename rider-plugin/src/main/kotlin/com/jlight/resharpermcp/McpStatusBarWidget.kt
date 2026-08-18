@@ -24,7 +24,7 @@ class McpStatusBarWidget(private val project: Project) : StatusBarWidget, Status
     // Cached status — read on EDT from the shared service
     private var connected: Boolean = false
     private var role: String = "unknown"
-    private var solutions: List<String> = emptyList()
+    private var solutions: List<SolutionInfo> = emptyList()
     private var port: Int = 0
 
     override fun ID(): String = ID
@@ -75,7 +75,9 @@ class McpStatusBarWidget(private val project: Project) : StatusBarWidget, Status
             if (solutions.isNotEmpty()) {
                 items.add(PopupItem("───", false))
                 items.add(PopupItem("Solutions:", false))
-                solutions.forEach { items.add(PopupItem("  $it", false)) }
+                solutions.forEach { solution ->
+                    items.add(PopupItem("  ${formatSolutionLabel(solution, solutions)}", false))
+                }
             }
             items.add(PopupItem("───", false))
             items.add(PopupItem("Restart Server", true))

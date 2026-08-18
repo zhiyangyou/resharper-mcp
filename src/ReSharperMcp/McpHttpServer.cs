@@ -17,8 +17,10 @@ namespace ReSharperMcp
         private volatile HttpListener _listener;
         private readonly ILogger _logger;
         private readonly object _lock = new object();
-        private readonly Dictionary<string, SolutionRegistration> _solutions = new Dictionary<string, SolutionRegistration>();
-        private readonly Dictionary<string, PeerRegistration> _peers = new Dictionary<string, PeerRegistration>();
+        private readonly Dictionary<string, SolutionRegistration> _solutions =
+            new Dictionary<string, SolutionRegistration>(SolutionPathIdentity.Comparer);
+        private readonly Dictionary<string, PeerRegistration> _peers =
+            new Dictionary<string, PeerRegistration>(SolutionPathIdentity.Comparer);
         private readonly RequestLogBuffer _requestLogs;
         private readonly ClientSessionTracker _clientSessions;
         private readonly string _sessionId;
@@ -42,12 +44,21 @@ namespace ReSharperMcp
         public void RegisterSolution(string solutionName, string solutionPath,
             List<ToolDefinition> tools, Dictionary<string, Func<JObject, object>> handlers)
         {
+            var normalizedPath = SolutionPathIdentity.Normalize(solutionPath);
+            if (string.IsNullOrWhiteSpace(solutionName) || normalizedPath == null || tools == null || handlers == null)
+            {
+                _logger.Error(new ArgumentException("Invalid solution registration"),
+                    $"Rejected local solution registration '{solutionName}' at '{solutionPath}'");
+                return;
+            }
+
             lock (_lock)
             {
-                _solutions[solutionPath] = new SolutionRegistration
+                _peers.Remove(normalizedPath);
+                _solutions[normalizedPath] = new SolutionRegistration
                 {
                     Name = solutionName,
-                    Path = solutionPath,
+                    Path = normalizedPath,
                     Tools = tools,
                     ToolHandlers = handlers
                 };
@@ -56,9 +67,13 @@ namespace ReSharperMcp
 
         public void UnregisterSolution(string solutionPath)
         {
+            var normalizedPath = SolutionPathIdentity.Normalize(solutionPath);
+            if (normalizedPath == null)
+                return;
+
             lock (_lock)
             {
-                _solutions.Remove(solutionPath);
+                _solutions.Remove(normalizedPath);
             }
         }
 
@@ -68,28 +83,56 @@ namespace ReSharperMcp
         /// </summary>
         public void TransferRegistrationsTo(McpHttpServer target)
         {
+            if (target == null)
+            {
+                _logger.Warn("Cannot transfer MCP registrations to a null server");
+                return;
+            }
+
+            List<SolutionRegistration> localSnapshot;
+            List<PeerRegistration> peerSnapshot;
             lock (_lock)
             {
-                foreach (var kvp in _solutions)
+                localSnapshot = _solutions.Values.ToList();
+                peerSnapshot = _peers.Values.Select(ClonePeer).ToList();
+            }
+
+            foreach (var s in localSnapshot)
+                target.RegisterSolution(s.Name, s.Path, s.Tools, s.ToolHandlers);
+
+            foreach (var p in peerSnapshot)
+                target.MergePeer(p);
+        }
+
+        private static PeerRegistration ClonePeer(PeerRegistration peer)
+        {
+            return new PeerRegistration
+            {
+                SolutionName = peer.SolutionName,
+                SolutionPath = peer.SolutionPath,
+                Port = peer.Port,
+                Tools = peer.Tools
+            };
+        }
+
+        private bool TryMergePeer(PeerRegistration peer)
+        {
+            var normalizedPath = SolutionPathIdentity.Normalize(peer?.SolutionPath);
+            if (peer == null || string.IsNullOrWhiteSpace(peer.SolutionName) || normalizedPath == null ||
+                peer.Port <= 0 || peer.Tools == null)
+                return false;
+
+            lock (_lock)
+            {
+                if (_solutions.ContainsKey(normalizedPath))
                 {
-                    var s = kvp.Value;
-                    target.RegisterSolution(s.Name, s.Path, s.Tools, s.ToolHandlers);
+                    _logger.Verbose($"Ignoring peer registration for locally-held solution at '{normalizedPath}'");
+                    return true;
                 }
 
-                // Best-effort transfer of known peers so the promoted primary can keep serving
-                // other processes' solutions immediately. Stale entries are cleaned up by the
-                // existing WebException handling in ProxyToPeer on first failed forward.
-                foreach (var kvp in _peers)
-                {
-                    var p = kvp.Value;
-                    target.MergePeer(new PeerRegistration
-                    {
-                        SolutionName = p.SolutionName,
-                        SolutionPath = p.SolutionPath,
-                        Port = p.Port,
-                        Tools = p.Tools
-                    });
-                }
+                peer.SolutionPath = normalizedPath;
+                _peers[normalizedPath] = peer;
+                return true;
             }
         }
 
@@ -99,10 +142,7 @@ namespace ReSharperMcp
         /// </summary>
         internal void MergePeer(PeerRegistration peer)
         {
-            lock (_lock)
-            {
-                _peers[peer.SolutionPath] = peer;
-            }
+            TryMergePeer(peer);
         }
 
         public void Start()
@@ -651,29 +691,7 @@ namespace ReSharperMcp
                     // 1. Try exact name or path match. This layer is also the stable-id lookup:
                     //    a solution id IS its full .sln path, and solution names never contain a path
                     //    separator, so an id always matches uniquely via Path.Equals.
-                    var matches = all
-                        .Where(s => s.Name.Equals(solutionName, StringComparison.OrdinalIgnoreCase)
-                                    || s.Path.Equals(solutionName, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-
-                    // 2. If ambiguous or no match, try path-segment matching
-                    if (matches.Count != 1)
-                    {
-                        var segmentMatches = all
-                            .Where(s => PathContainsSegment(s.Path, solutionName))
-                            .ToList();
-
-                        if (segmentMatches.Count == 1)
-                        {
-                            // Path-segment uniquely identifies a solution
-                            matches = segmentMatches;
-                        }
-                        else if (matches.Count == 0 && segmentMatches.Count > 0)
-                        {
-                            // No exact matches — use segment matches (may still be ambiguous)
-                            matches = segmentMatches;
-                        }
-                    }
+                    var matches = SolutionRouting.FindMatches(all, solutionName);
 
                     if (matches.Count == 0)
                     {
@@ -684,7 +702,7 @@ namespace ReSharperMcp
 
                     if (matches.Count > 1)
                     {
-                        var disambiguators = ComputeDisambiguators(
+                        var disambiguators = SolutionRouting.ComputeDisambiguators(
                             all.Select(s => new NameAndPath { Name = s.Name, Path = s.Path }).ToList());
                         var available = string.Join("\n",
                             matches.Select(s =>
@@ -731,6 +749,7 @@ namespace ReSharperMcp
 
             // Execute outside lock
             entry.Solution = targetSolution;
+            entry.SolutionId = targetPath;
             if (peerPort > 0)
             {
                 entry.Kind = RequestKind.Forwarded;
@@ -762,22 +781,7 @@ namespace ReSharperMcp
         {
             try
             {
-                // Forward the resolved solution id (full path) so the peer can route deterministically.
-                // The peer's own registration key is byte-for-byte the same string (peer → internal/register → primary),
-                // so its exact-path match in HandleToolCall resolves to itself (IsLocal) — never re-proxied. The peer
-                // strips solutionName again before dispatching to the tool handler, so it never leaks to the tool.
-                arguments["solutionName"] = solutionPath;
-
-                var peerRequest = new JsonRpcRequest
-                {
-                    Id = originalRequest.Id,
-                    Method = "tools/call",
-                    Params = new JObject
-                    {
-                        ["name"] = toolName,
-                        ["arguments"] = arguments
-                    }
-                };
+                var peerRequest = PeerRequestBuilder.Build(originalRequest, toolName, arguments, solutionPath);
 
                 var json = JsonConvert.SerializeObject(peerRequest);
                 var url = $"http://127.0.0.1:{peerPort}/";
@@ -805,11 +809,15 @@ namespace ReSharperMcp
                 // Peer is unreachable — remove stale registration
                 lock (_lock)
                 {
-                    var staleKey = _peers.FirstOrDefault(p => p.Value.Port == peerPort).Key;
-                    if (staleKey != null)
+                    var staleKeys = _peers
+                        .Where(p => p.Value.Port == peerPort)
+                        .Select(p => p.Key)
+                        .ToList();
+                    if (staleKeys.Count > 0)
                     {
                         _logger.Warn($"Removing unreachable peer on port {peerPort}");
-                        _peers.Remove(staleKey);
+                        foreach (var staleKey in staleKeys)
+                            _peers.Remove(staleKey);
                     }
                 }
 
@@ -835,7 +843,7 @@ namespace ReSharperMcp
                 foreach (var p in _peers.Values)
                     allEntries.Add(new NameAndPath { Name = p.SolutionName, Path = p.SolutionPath });
 
-                var disambiguators = ComputeDisambiguators(allEntries);
+                var disambiguators = SolutionRouting.ComputeDisambiguators(allEntries);
 
                 foreach (var s in _solutions.Values)
                 {
@@ -844,6 +852,7 @@ namespace ReSharperMcp
                         ["id"] = s.Path, // stable unique id — the full .sln path (also the registration key)
                         ["name"] = s.Name,
                         ["path"] = s.Path,
+                        ["source"] = "local",
                         ["toolCount"] = s.Tools.Count
                     };
                     if (disambiguators.TryGetValue(s.Path, out var hint))
@@ -858,6 +867,8 @@ namespace ReSharperMcp
                         ["id"] = p.SolutionPath,
                         ["name"] = p.SolutionName,
                         ["path"] = p.SolutionPath,
+                        ["source"] = "peer",
+                        ["peerPort"] = p.Port,
                         ["toolCount"] = p.Tools.Count
                     };
                     if (disambiguators.TryGetValue(p.SolutionPath, out var hint))
@@ -888,10 +899,10 @@ namespace ReSharperMcp
         {
             var port = request.Params?["port"]?.Value<int>() ?? 0;
             var name = request.Params?["solutionName"]?.ToString();
-            var path = request.Params?["solutionPath"]?.ToString();
+            var path = SolutionPathIdentity.Normalize(request.Params?["solutionPath"]?.ToString());
             var toolsToken = request.Params?["tools"] as JArray;
 
-            if (port > 0 && !string.IsNullOrEmpty(path))
+            if (port > 0 && !string.IsNullOrEmpty(path) && !string.IsNullOrWhiteSpace(name))
             {
                 var tools = new List<ToolDefinition>();
                 if (toolsToken != null)
@@ -907,29 +918,13 @@ namespace ReSharperMcp
                     }
                 }
 
-                lock (_lock)
+                TryMergePeer(new PeerRegistration
                 {
-                    // Guard against self-registration: a peer must never register a path that this
-                    // process holds locally — that would put the same solution in both _solutions
-                    // and _peers and make its own exact-path match ambiguous.
-                    if (_solutions.ContainsKey(path))
-                    {
-                        _logger.Verbose($"Ignoring peer registration for locally-held solution at '{path}'");
-                        return new JsonRpcResponse
-                        {
-                            Id = request.Id,
-                            Result = new JObject { ["ok"] = true }
-                        };
-                    }
-
-                    _peers[path] = new PeerRegistration
-                    {
-                        SolutionName = name,
-                        SolutionPath = path,
-                        Port = port,
-                        Tools = tools
-                    };
-                }
+                    SolutionName = name,
+                    SolutionPath = path,
+                    Port = port,
+                    Tools = tools
+                });
 
                 _logger.Verbose($"Registered peer solution '{name}' on port {port}");
             }
@@ -943,16 +938,28 @@ namespace ReSharperMcp
 
         private JsonRpcResponse HandlePeerDeregister(JsonRpcRequest request)
         {
-            var path = request.Params?["solutionPath"]?.ToString();
+            var path = SolutionPathIdentity.Normalize(request.Params?["solutionPath"]?.ToString());
+            var port = request.Params?["port"]?.Value<int>() ?? 0;
 
             if (!string.IsNullOrEmpty(path))
             {
-                lock (_lock)
+                if (port <= 0)
                 {
-                    _peers.Remove(path);
+                    _logger.Warn($"Ignoring legacy peer deregistration without owner port for '{path}'");
                 }
-
-                _logger.Info($"Deregistered peer solution at '{path}'");
+                else
+                {
+                    lock (_lock)
+                    {
+                        if (_peers.TryGetValue(path, out var current) && current.Port == port)
+                        {
+                            _peers.Remove(path);
+                            _logger.Info($"Deregistered peer solution at '{path}' on port {port}");
+                        }
+                        else
+                            _logger.Verbose($"Ignored stale peer deregistration for '{path}' on port {port}");
+                    }
+                }
             }
 
             return new JsonRpcResponse
@@ -1034,7 +1041,8 @@ namespace ReSharperMcp
                     {
                         ["id"] = s.Path,
                         ["name"] = s.Name,
-                        ["path"] = s.Path
+                        ["path"] = s.Path,
+                        ["source"] = "local"
                     });
                 }
 
@@ -1046,7 +1054,9 @@ namespace ReSharperMcp
                         {
                             ["id"] = p.SolutionPath,
                             ["name"] = p.SolutionName,
-                            ["path"] = p.SolutionPath
+                            ["path"] = p.SolutionPath,
+                            ["source"] = "peer",
+                            ["peerPort"] = p.Port
                         });
                     }
                 }
@@ -1086,58 +1096,6 @@ namespace ReSharperMcp
         }
 
         #endregion
-
-        /// <summary>
-        /// Checks if <paramref name="segment"/> appears as a complete path segment in <paramref name="path"/>.
-        /// E.g. "tps-project" matches ".../tps-project/..." but NOT ".../tps-project-dyn/...".
-        /// Also supports multi-segment queries like "tps-project/Client".
-        /// </summary>
-        private static bool PathContainsSegment(string path, string segment)
-        {
-            var normalized = "/" + path.Replace("\\", "/") + "/";
-            var search = "/" + segment.Replace("\\", "/") + "/";
-            return normalized.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        /// <summary>
-        /// For solutions with duplicate names, finds the first parent directory segment
-        /// that uniquely identifies each solution. Returns a map of path → unique segment.
-        /// </summary>
-        private static Dictionary<string, string> ComputeDisambiguators(List<NameAndPath> solutions)
-        {
-            var result = new Dictionary<string, string>();
-            var groups = solutions.GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var group in groups)
-            {
-                var items = group.ToList();
-                if (items.Count <= 1) continue;
-
-                foreach (var item in items)
-                {
-                    var segments = item.Path.Replace("\\", "/").Split('/');
-                    // Walk from right to left, skipping the filename
-                    for (var i = segments.Length - 2; i >= 0; i--)
-                    {
-                        var seg = segments[i];
-                        if (string.IsNullOrEmpty(seg)) continue;
-
-                        var wrappedSeg = "/" + seg + "/";
-                        var matchCount = items.Count(other =>
-                            ("/" + other.Path.Replace("\\", "/") + "/")
-                                .IndexOf(wrappedSeg, StringComparison.OrdinalIgnoreCase) >= 0);
-
-                        if (matchCount == 1)
-                        {
-                            result[item.Path] = seg;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            return result;
-        }
 
         private static JsonRpcResponse ToolError(JsonRpcRequest request, string message)
         {

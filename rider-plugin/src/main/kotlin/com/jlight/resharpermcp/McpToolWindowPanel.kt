@@ -132,9 +132,9 @@ class McpToolWindowPanel(project: Project, toolWindow: ToolWindow) : JPanel(Bord
             else -> Color(0x2E7D32)            // green
         }
 
-        // MCP count: local solutions + peer processes
+        // MCP count: local solutions + distinct peer processes
         val local = state.localSolutions.size
-        val peer = state.peerSolutions.size
+        val peer = state.peerProcessCount
         statusClients.text = when {
             peer > 0 -> "MCP: 本地 $local + Peer $peer"
             else -> "MCP: 本地 $local"

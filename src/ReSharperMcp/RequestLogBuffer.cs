@@ -33,6 +33,7 @@ namespace ReSharperMcp
         public RequestKind Kind;           // Local / Forwarded / Other
         public long DurationMs;            // Stopwatch, filled by the envelope
         public string Solution;            // resolved target solution name (local branch)
+        public string SolutionId;          // resolved target solution path (stable id)
         public int PeerPort;               // > 0 when forwarded to a peer
         public bool ViaPrimary;            // true when this process received the call via the primary's Mcp-Proxy header
         public string Args;                // full arguments, for the detail view
@@ -60,6 +61,7 @@ namespace ReSharperMcp
                 ["viaPrimary"] = ViaPrimary,
                 ["durationMs"] = DurationMs,
                 ["solution"] = Solution,
+                ["solutionId"] = SolutionId,
                 ["peerPort"] = PeerPort,
                 ["args"] = Args,
                 ["result"] = Result,
