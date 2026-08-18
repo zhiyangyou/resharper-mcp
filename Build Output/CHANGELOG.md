@@ -1,5 +1,11 @@
 # ChangeLog
 
+## [0.11.2] - 2026-08-18
+
+- Fixed Peer monitor log latency by keeping the cursor at the last consumed log entry instead of the next-index watermark.
+- Peer SSE connections now select the backend that locally owns the current Solution and deduplicate replayed log entries.
+- Added regression coverage for cursor handling and Primary/Peer monitor endpoint selection.
+
 ## [0.11.1] - 2026-08-18
 
 - Fixed deterministic routing for same-name solutions by using normalized full-path IDs across local and peer registries.

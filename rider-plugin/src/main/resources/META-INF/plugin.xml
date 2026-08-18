@@ -1,7 +1,7 @@
 <idea-plugin require-restart="true">
   <id>com.j-light.resharper-mcp</id>
   <name>MCP Server for Code Intelligence</name>
-  <version>0.11.1</version>
+  <version>0.11.2</version>
   <vendor email="j.light.developer@gmail.com" url="https://plugins.jetbrains.com/vendor/j-light">Joshua Light</vendor>
   <idea-version since-build="253" />
   <depends>com.intellij.modules.rider</depends>
@@ -74,6 +74,11 @@
     <p>Set the <code>RESHARPER_MCP_PORT</code> environment variable before launching Rider to use a different port.</p>
   ]]></getting-started>
   <change-notes><![CDATA[
+    <p><b>0.11.2</b></p>
+    <ul>
+      <li>Fixed Peer monitor log latency by keeping the cursor at the last consumed log entry instead of the next-index watermark.</li>
+      <li>Peer SSE connections now select the backend that locally owns the current Solution and deduplicate replayed log entries.</li>
+    </ul>
     <p><b>0.11.1</b></p>
     <ul>
       <li>Disambiguate same-name solutions by normalized full path across local and peer Rider instances.</li>

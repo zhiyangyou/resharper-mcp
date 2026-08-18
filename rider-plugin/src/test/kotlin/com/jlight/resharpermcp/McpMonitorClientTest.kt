@@ -73,4 +73,49 @@ class McpMonitorClientTest {
         assertEquals("G:/repo/Client.sln", snapshot.logs.single().solutionId)
         assertEquals(23742, snapshot.logs.single().peerPort)
     }
+
+    @Test
+    fun parseSnapshotDoesNotAdvanceLogCursorToNextIndex() {
+        val client = McpMonitorClient()
+        val snapshot = client.parseSnapshot(
+            """
+            {
+              "result": {
+                "role":"peer","port":23742,"solutions":[],"localSolutions":[],
+                "clientCount":0,"clients":[],"toolStats":[],"nextIndex":8,
+                "counts":{"local":1,"forwarded":0,"other":0,"errors":0},
+                "logs":[{"index":7,"ts":1,"method":"tools/call","tool":"list_solutions","kind":"local","viaPrimary":false,"durationMs":1,"solution":null,"solutionId":null,"peerPort":0,"args":"{}","result":"ok","argsPreview":"{}","resultPreview":"ok","isError":false,"errorText":null,"argsPreviewTruncated":false,"resultPreviewTruncated":false}]
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(7, snapshot.logs.single().index)
+        assertEquals(-1, client.lastIndex)
+        client.advanceLastIndex(snapshot.logs.single().index)
+        assertEquals(7, client.lastIndex)
+    }
+
+    @Test
+    fun peerProjectDoesNotMatchPrimaryPeerSolutionForSse() {
+        val client = McpMonitorClient("G:/repo/Client")
+        val primaryStatus =
+            """
+            {"result":{"role":"primary","port":23741,
+              "localSolutions":[{"path":"D:/repo/Client/Client.sln","source":"local"}],
+              "solutions":[
+                {"path":"D:/repo/Client/Client.sln","source":"local"},
+                {"path":"G:/repo/Client/Client.sln","source":"peer","peerPort":23742}
+              ]}}
+            """.trimIndent()
+        val peerStatus =
+            """
+            {"result":{"role":"peer","port":23742,
+              "localSolutions":[{"path":"G:/repo/Client/Client.sln","source":"local"}],
+              "solutions":[{"path":"G:/repo/Client/Client.sln","source":"local"}]}}
+            """.trimIndent()
+
+        assertTrue(!client.isResponseForCurrentProject(primaryStatus))
+        assertTrue(client.isResponseForCurrentProject(peerStatus))
+    }
 }

@@ -1,6 +1,6 @@
 # ReSharper MCP Server
 
-**Version:** `0.11.1`
+**Version:** `0.11.2`
 
 
 An MCP (Model Context Protocol) server that runs inside the ReSharper/Rider backend process, exposing code intelligence features to AI assistants via HTTP.

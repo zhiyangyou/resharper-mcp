@@ -28,10 +28,10 @@ class McpMonitorClient(private val projectBasePath: String? = null) {
 
     @Volatile var port: Int = resolvePort()
     @Volatile var connected: Boolean = false
-    @Volatile var lastIndex: Long = 0
+    @Volatile var lastIndex: Long = -1
 
     /** Fetches a monitor snapshot since [after]; null when the backend is unreachable. */
-    fun fetchMonitor(after: Long = 0, limit: Int = 200): MonitorSnapshot? {
+    fun fetchMonitor(after: Long = -1, limit: Int = 200): MonitorSnapshot? {
         val body = """{"jsonrpc":"2.0","id":1,"method":"internal/monitor","params":{"after":$after,"limit":$limit}}"""
         val json = httpPostForProject(body) ?: return null
         return try {
@@ -51,6 +51,19 @@ class McpMonitorClient(private val projectBasePath: String? = null) {
     /** Reads the PID sidecar file after a failed poll — handles promotion changing this process's port. */
     fun refreshPortIfNeeded() {
         readPidPortFile()?.let { port = it }
+    }
+
+    fun advanceLastIndex(index: Long) {
+        if (index <= lastIndex)
+            return
+        synchronized(this) {
+            if (index > lastIndex)
+                lastIndex = index
+        }
+    }
+
+    internal fun isResponseForCurrentProject(json: String): Boolean {
+        return belongsToProject(json)
     }
 
     /**
@@ -166,7 +179,6 @@ class McpMonitorClient(private val projectBasePath: String? = null) {
             counts = result["counts"].fields().asSequence().associate { it.key to it.value.asLong() }
         )
         val logs = result["logs"].mapNotNull { parseLog(it) }
-        result["nextIndex"].asLong().let { if (it > lastIndex) lastIndex = it }
         connected = true
         return MonitorSnapshot(state, logs)
     }
@@ -303,8 +315,9 @@ class McpMonitorClient(private val projectBasePath: String? = null) {
             val solutions = localSolutions.takeIf { it != null && it.isArray }
                 ?: result["solutions"]
             solutions != null && solutions.isArray && solutions.any { node ->
+                val source = node["source"].asText("").trim().lowercase()
                 val path = node["path"].asText("").trim()
-                pathMatchesProject(path, basePath)
+                (source.isBlank() || source == "local") && pathMatchesProject(path, basePath)
             }
         } catch (_: Exception) {
             false

@@ -978,6 +978,7 @@ namespace ReSharperMcp
                 {
                     ["port"] = Port,
                     ["role"] = IsPrimary ? "primary" : "peer",
+                    ["localSolutions"] = BuildSolutionsArray(includePeers: false),
                     ["solutions"] = BuildSolutionsArray(includePeers: true)
                 }
             };

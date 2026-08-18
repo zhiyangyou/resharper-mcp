@@ -67,7 +67,8 @@ class McpMonitorService(private val project: Project) : Disposable {
     // --- Polling ---
 
     private fun poll() {
-        val snapshot = client.fetchMonitor(after = client.lastIndex)
+        val cursor = client.lastIndex
+        val snapshot = client.fetchMonitor(after = cursor)
         if (snapshot == null) {
             // Backend unreachable — retry with a fresh port (promotion may have changed it)
             client.refreshPortIfNeeded()
@@ -76,26 +77,29 @@ class McpMonitorService(private val project: Project) : Disposable {
             return
         }
         state = snapshot.state
-        val fresh = snapshot.logs.filter { it.index > client.lastIndex }
-        if (fresh.isNotEmpty()) {
-            client.lastIndex = fresh.maxOf { it.index }
-            synchronized(this) {
-                entries = (entries + fresh.filter(logFilter))
-                    .sortedBy { it.index }
-                    .takeLast(MAX_ENTRIES)
-            }
-        }
+        val fresh = snapshot.logs.filter { it.index > cursor }
+        snapshot.logs.maxOfOrNull { it.index }?.let { client.advanceLastIndex(it) }
+        appendEntries(fresh.filter(logFilter))
         notifyListeners()
     }
 
     private fun onSseLog(entry: RequestLogEntry) {
         if (entry.index <= client.lastIndex) return // duplicate / replay — drop
-        client.lastIndex = entry.index
+        client.advanceLastIndex(entry.index)
         if (!logFilter(entry)) return // filtered out — advance lastIndex but don't store
-        synchronized(this) {
-            entries = (entries + entry).sortedBy { it.index }.takeLast(MAX_ENTRIES)
-        }
+        appendEntries(listOf(entry))
         notifyListeners()
+    }
+
+    private fun appendEntries(newEntries: List<RequestLogEntry>) {
+        if (newEntries.isEmpty())
+            return
+        synchronized(this) {
+            entries = (entries + newEntries)
+                .distinctBy { it.index }
+                .sortedBy { it.index }
+                .takeLast(MAX_ENTRIES)
+        }
     }
 
     private fun notifyListeners() {
